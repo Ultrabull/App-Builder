@@ -21,7 +21,21 @@
     favorites: "pocketai.favorites",
     autoread: "pocketai.autoread",
     system: "pocketai.system",
+    memory: "pocketai.memory",
+    skills: "pocketai.skills",
+    activeSkill: "pocketai.activeskill",
   };
+
+  // Built-in skills (specialized assistants). Custom ones are stored
+  // separately and merged in. "General" = base personality only.
+  const DEFAULT_SKILLS = [
+    { id: "general", emoji: "💬", name: "General", prompt: "" },
+    { id: "writer", emoji: "✍️", name: "Writing coach", prompt: "You are a sharp, encouraging writing partner. Help draft, tighten, and improve writing. Offer a clear version, then note what you changed." },
+    { id: "coder", emoji: "💻", name: "Coding buddy", prompt: "You are a concise coding helper. When asked for code, give working, copy-ready snippets with a short explanation. Prefer simple, modern solutions." },
+    { id: "chef", emoji: "🍳", name: "Chef", prompt: "You are a friendly home-cooking assistant. Suggest recipes from the ingredients or cravings given, with simple step-by-step instructions and quick substitutions." },
+    { id: "tutor", emoji: "🗣️", name: "Language tutor", prompt: "You are a patient language tutor. Hold a natural conversation, gently correct mistakes, and briefly explain the fix. Keep it at the learner's level." },
+    { id: "planner", emoji: "🗓️", name: "Planner", prompt: "You help turn goals into clear, realistic, step-by-step plans with priorities and timeframes. Ask for any missing detail first." },
+  ];
 
   // Curated fallback list, used until the live /models endpoint is loaded.
   const CURATED = [
@@ -79,6 +93,9 @@
     favorites: load(STORE.favorites, []),
     autoRead: load(STORE.autoread, false),
     systemPrompt: load(STORE.system, DEFAULT_SYSTEM),
+    memory: load(STORE.memory, []),          // array of fact strings
+    customSkills: load(STORE.skills, []),    // user-created skills
+    activeSkillId: load(STORE.activeSkill, "general"),
   };
   let controller = null;       // AbortController for the in-flight request
   let streaming = false;
@@ -102,6 +119,19 @@
     themeBtn: $("themeBtn"),
     settingsBtn: $("settingsBtn"),
     freeBtn: $("freeBtn"),
+    // skills
+    skillsBtn: $("skillsBtn"),
+    skillsBtnLabel: $("skillsBtnLabel"),
+    skillsModal: $("skillsModal"),
+    skillsClose: $("skillsClose"),
+    skillsList: $("skillsList"),
+    skillName: $("skillName"),
+    skillPrompt: $("skillPrompt"),
+    skillAdd: $("skillAdd"),
+    // memory
+    memList: $("memList"),
+    memInput: $("memInput"),
+    memAdd: $("memAdd"),
     // model picker
     modelBtn: $("modelBtn"),
     modelBtnLabel: $("modelBtnLabel"),
@@ -507,6 +537,10 @@
     const image = pendingImage;
     if (!text && !image) return;
 
+    // "remember that …" / "remember: …" quietly saves a fact to memory.
+    const rem = text.match(/^\s*remember(?:\s+that\b|\s*:)\s*(.+)$/i);
+    if (rem) { addMemory(rem[1].trim()); showToast("Saved to memory"); }
+
     const chat = ensureChat();
     const wasEmpty = chat.messages.length === 0;
     const content = buildUserContent(text, image);
@@ -532,7 +566,7 @@
     setStreaming(true);
     controller = new AbortController();
     const payload = chat.messages.map((m) => ({ role: m.role, content: m.content }));
-    const sys = (state.systemPrompt || "").trim();
+    const sys = buildSystemMessage();
     if (sys) payload.unshift({ role: "system", content: sys });
     const out = { text: "" };
     let usedFallback = false;
@@ -905,8 +939,136 @@
     updateSendState();
   }
 
+  /* ============================ Skills ================================= */
+  function allSkills() { return DEFAULT_SKILLS.concat(state.customSkills); }
+  function activeSkill() {
+    return allSkills().find((s) => s.id === state.activeSkillId) || DEFAULT_SKILLS[0];
+  }
+  function updateSkillsButton() {
+    const s = activeSkill();
+    dom.skillsBtnLabel.textContent = s.id === "general" ? "Skills" : `${s.emoji} ${s.name}`;
+  }
+
+  function renderSkills() {
+    const list = allSkills();
+    dom.skillsList.innerHTML = "";
+    for (const s of list) {
+      const row = el("div", "model-row" + (s.id === state.activeSkillId ? " selected" : ""));
+      const info = el("div", "model-info");
+      const nm = el("div", "model-name");
+      nm.textContent = `${s.emoji} ${s.name}`;
+      info.appendChild(nm);
+      if (s.prompt) {
+        const meta = el("div", "model-meta");
+        const desc = el("span", "model-id");
+        desc.textContent = s.prompt.length > 90 ? s.prompt.slice(0, 90) + "…" : s.prompt;
+        meta.appendChild(desc);
+        info.appendChild(meta);
+      }
+      row.appendChild(info);
+      if (!DEFAULT_SKILLS.some((d) => d.id === s.id)) {
+        const del = el("button", "model-star");
+        del.type = "button";
+        del.textContent = "🗑";
+        del.setAttribute("aria-label", "Delete skill");
+        del.addEventListener("click", (e) => { e.stopPropagation(); deleteSkill(s.id); });
+        row.appendChild(del);
+      }
+      row.addEventListener("click", () => selectSkill(s.id));
+      dom.skillsList.appendChild(row);
+    }
+  }
+
+  function selectSkill(id) {
+    state.activeSkillId = id;
+    save(STORE.activeSkill, id);
+    updateSkillsButton();
+    renderSkills();
+    const s = activeSkill();
+    showToast(s.id === "general" ? "Skill: General" : `Skill: ${s.emoji} ${s.name}`);
+    closeSkillsModal();
+    closeSidebar();
+  }
+
+  function addCustomSkill() {
+    const name = dom.skillName.value.trim();
+    const prompt = dom.skillPrompt.value.trim();
+    if (!name || !prompt) { showToast("Add a name and instructions"); return; }
+    const skill = { id: "custom-" + uid(), emoji: "⭐", name, prompt };
+    state.customSkills.push(skill);
+    save(STORE.skills, state.customSkills);
+    dom.skillName.value = "";
+    dom.skillPrompt.value = "";
+    selectSkill(skill.id);
+  }
+
+  function deleteSkill(id) {
+    state.customSkills = state.customSkills.filter((s) => s.id !== id);
+    save(STORE.skills, state.customSkills);
+    if (state.activeSkillId === id) { state.activeSkillId = "general"; save(STORE.activeSkill, "general"); updateSkillsButton(); }
+    renderSkills();
+  }
+
+  function openSkillsModal() { renderSkills(); dom.skillsModal.hidden = false; }
+  function closeSkillsModal() { dom.skillsModal.hidden = true; }
+
+  /* ============================ Memory ================================= */
+  function renderMemory() {
+    dom.memList.innerHTML = "";
+    if (!state.memory.length) {
+      const e = el("div", "mem-empty");
+      e.textContent = "No memories yet.";
+      dom.memList.appendChild(e);
+      return;
+    }
+    state.memory.forEach((fact, i) => {
+      const item = el("div", "mem-item");
+      const span = el("span");
+      span.textContent = fact;
+      const del = el("button", "mem-del");
+      del.type = "button";
+      del.textContent = "✕";
+      del.setAttribute("aria-label", "Delete memory");
+      del.addEventListener("click", () => removeMemory(i));
+      item.appendChild(span);
+      item.appendChild(del);
+      dom.memList.appendChild(item);
+    });
+  }
+
+  function addMemory(fact) {
+    fact = (fact || "").trim();
+    if (!fact) return;
+    if (state.memory.some((m) => m.toLowerCase() === fact.toLowerCase())) return;
+    state.memory.push(fact);
+    save(STORE.memory, state.memory);
+    renderMemory();
+  }
+
+  function removeMemory(i) {
+    state.memory.splice(i, 1);
+    save(STORE.memory, state.memory);
+    renderMemory();
+  }
+
+  // Assemble the full system message: personality + active skill + memory.
+  function buildSystemMessage() {
+    const parts = [];
+    const base = (state.systemPrompt || "").trim();
+    if (base) parts.push(base);
+    const sk = activeSkill();
+    if (sk && sk.prompt && sk.prompt.trim()) {
+      parts.push(`For this conversation, take on this role — ${sk.name}: ${sk.prompt.trim()}`);
+    }
+    if (state.memory && state.memory.length) {
+      parts.push("Things to remember about the user:\n" + state.memory.map((m) => "- " + m).join("\n"));
+    }
+    return parts.join("\n\n");
+  }
+
   /* ============================ Settings ================================ */
   function openSettings() {
+    renderMemory();
     dom.apiKeyInput.value = state.apiKey || "";
     dom.endpointInput.value = state.endpoint || DEFAULT_ENDPOINT;
     dom.fallbackInput.value = state.fallbackModel || "";
@@ -1025,6 +1187,19 @@
     });
 
     dom.newChat.addEventListener("click", () => { newChat(true); closeSidebar(); });
+
+    // Skills
+    dom.skillsBtn.addEventListener("click", openSkillsModal);
+    dom.skillsClose.addEventListener("click", closeSkillsModal);
+    dom.skillsModal.addEventListener("click", (e) => { if (e.target === dom.skillsModal) closeSkillsModal(); });
+    dom.skillAdd.addEventListener("click", addCustomSkill);
+
+    // Memory
+    dom.memAdd.addEventListener("click", () => { addMemory(dom.memInput.value); dom.memInput.value = ""; });
+    dom.memInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addMemory(dom.memInput.value); dom.memInput.value = ""; }
+    });
+
     dom.menuBtn.addEventListener("click", openSidebar);
     dom.backdrop.addEventListener("click", closeSidebar);
     dom.themeBtn.addEventListener("click", toggleTheme);
@@ -1081,6 +1256,7 @@
       if (e.key !== "Escape") return;
       if (!dom.settingsModal.hidden) closeSettings();
       else if (!dom.modelModal.hidden) closeModelModal();
+      else if (!dom.skillsModal.hidden) closeSkillsModal();
       else closeSidebar();
     });
 
@@ -1115,6 +1291,7 @@
   function init() {
     initTheme();
     updateModelButton();
+    updateSkillsButton();
     renderChatList();
 
     if (!state.chats.length || !currentChat()) newChat(false);

@@ -100,6 +100,46 @@ body {
 }
 .btn-new:hover { background: var(--accent-soft); border-color: var(--accent); }
 
+.btn-skill {
+  width: 100%;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.btn-skill:hover { background: var(--surface); color: var(--text); border-color: var(--accent); }
+.btn-skill svg { flex: 0 0 auto; }
+.btn-skill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Memory list */
+.mem-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.mem-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 13.5px;
+}
+.mem-item span { flex: 1; word-break: break-word; }
+.mem-del {
+  flex: 0 0 auto; border: none; background: transparent;
+  color: var(--text-dim); cursor: pointer; font-size: 13px;
+  padding: 2px 4px; border-radius: 6px;
+}
+.mem-del:hover { color: var(--danger); background: var(--surface); }
+.mem-empty { color: var(--text-dim); font-size: 13px; padding: 4px 2px; }
+
 .chat-list {
   flex: 1;
   overflow-y: auto;
