@@ -1068,6 +1068,28 @@
 
   const isTouch = () => window.matchMedia("(pointer: coarse)").matches;
 
+  // iOS Safari does not shrink the layout for the on-screen keyboard, which
+  // pushes the fixed-height UI off-screen. Size the app to the *visual*
+  // viewport instead so it always fits the space above the keyboard.
+  function syncViewportHeight() {
+    const vv = window.visualViewport;
+    const h = vv ? vv.height : window.innerHeight;
+    document.documentElement.style.setProperty("--app-h", h + "px");
+    if (vv && vv.offsetTop > 0) window.scrollTo(0, 0);
+  }
+
+  function setupViewport() {
+    syncViewportHeight();
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", syncViewportHeight);
+      window.visualViewport.addEventListener("scroll", syncViewportHeight);
+    }
+    window.addEventListener("resize", syncViewportHeight);
+    window.addEventListener("orientationchange", () => setTimeout(syncViewportHeight, 200));
+    // When the field is focused (keyboard opens), re-fit and reveal the latest message.
+    dom.input.addEventListener("focus", () => setTimeout(() => { syncViewportHeight(); scrollToBottom(true); }, 300));
+  }
+
   /* ============================ Startup =============================== */
   function init() {
     initTheme();
@@ -1078,6 +1100,7 @@
     else renderMessages();
 
     wireEvents();
+    setupViewport();
     updateSendState();
 
     // Hide voice-input button where unsupported (e.g. some desktop browsers).

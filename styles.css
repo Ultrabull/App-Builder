@@ -22,6 +22,7 @@
   --radius: 16px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --app-h: 100dvh; /* overridden by JS to the visual viewport height (keyboard-aware) */
 }
 
 :root[data-theme="dark"] {
@@ -51,7 +52,7 @@
 html, body {
   margin: 0;
   height: 100%;
-  height: 100dvh;
+  height: var(--app-h);
   /* Stop iOS from auto-inflating text when the keyboard/viewport changes. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -74,7 +75,7 @@ body {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  height: 100dvh;
+  height: var(--app-h);
   transition: transform 0.25s ease;
   z-index: 40;
 }
@@ -165,7 +166,7 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  height: 100dvh;
+  height: var(--app-h);
 }
 
 .topbar {
@@ -620,7 +621,7 @@ body.streaming .ico-stop { display: inline; }
   .sidebar {
     position: fixed;
     top: 0; left: 0;
-    height: 100dvh;
+    height: var(--app-h);
     transform: translateX(-100%);
     box-shadow: var(--shadow);
   }
