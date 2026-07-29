@@ -1,0 +1,62 @@
+name: Deploy to GitHub Pages
+
+# Publishes the static site to GitHub Pages on every push to the default
+# branch. You can also run it manually from the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Permissions needed by the Pages deployment actions.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; let an in-progress run finish rather than
+# cancelling it, so a live deploy is never interrupted.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        # enablement: true turns Pages on automatically on the first run
+        # (if the repository allows it), so no manual toggle is required.
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Stage site files
+        # Copy the app into a clean folder so git/CI internals are not
+        # published. Uses only cp/bash (portable, no rsync). New top-level
+        # files are picked up automatically. .nojekyll disables Jekyll so
+        # every file is served verbatim.
+        run: |
+          mkdir -p _site
+          for item in * .[!.]*; do
+            [ -e "$item" ] || continue
+            case "$item" in
+              .git|.github|_site) continue ;;
+            esac
+            cp -R "$item" _site/
+          done
+          touch _site/.nojekyll
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
