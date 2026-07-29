@@ -193,6 +193,8 @@ body {
   transition: background 0.15s, color 0.15s;
 }
 .icon-btn:hover { background: var(--bg-elev); color: var(--text); }
+.free-btn { color: #f59e0b; }
+.free-btn:hover { color: #f59e0b; background: color-mix(in srgb, #f59e0b 16%, transparent); }
 
 .menu-only { display: none; }
 

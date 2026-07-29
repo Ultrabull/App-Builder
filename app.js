@@ -89,6 +89,7 @@
     backdrop: $("backdrop"),
     themeBtn: $("themeBtn"),
     settingsBtn: $("settingsBtn"),
+    freeBtn: $("freeBtn"),
     // model picker
     modelBtn: $("modelBtn"),
     modelBtnLabel: $("modelBtnLabel"),
@@ -701,12 +702,15 @@
       (items.length > MODEL_LIST_CAP ? ` · showing ${MODEL_LIST_CAP}` : "");
   }
 
-  function openModelModal() {
+  function openModelModal(preFree) {
     dom.modelModal.hidden = false;
     dom.modelCustomInput.value = "";
+    if (preFree) { dom.modelFreeOnly.checked = true; dom.modelSearch.value = ""; }
     renderModelList();
-    // Pull the live list the first time (public endpoint; no key required).
+    // Pull the live list (public endpoint; no key required) so free models
+    // reflect what's actually available right now.
     if (!state.models) refreshModels();
+    else if (preFree) refreshModels();
     setTimeout(() => dom.modelSearch.focus(), 30);
   }
   function closeModelModal() { dom.modelModal.hidden = true; }
@@ -1011,7 +1015,8 @@
     dom.fileInput.addEventListener("change", (e) => handleFile(e.target.files && e.target.files[0]));
 
     // Model picker
-    dom.modelBtn.addEventListener("click", openModelModal);
+    dom.modelBtn.addEventListener("click", () => openModelModal(false));
+    dom.freeBtn.addEventListener("click", () => openModelModal(true));
     dom.modelModalClose.addEventListener("click", closeModelModal);
     dom.modelModal.addEventListener("click", (e) => { if (e.target === dom.modelModal) closeModelModal(); });
     dom.modelSearch.addEventListener("input", renderModelList);
