@@ -1,13 +1,12 @@
 /* =========================================================================
-   Pocket AI — a private, single-page chat client for OpenRouter.
-   No frameworks, no build step. Everything lives in the browser.
+   Pocket AI — a private, single-page chat client for OpenRouter-compatible
+   APIs. No frameworks, no build step. Everything lives in the browser.
    ========================================================================= */
 (() => {
   "use strict";
 
   /* ----------------------------- Config ---------------------------------- */
-  const API_URL = "https://openrouter.ai/api/v1/chat/completions";
-  const MODELS_URL = "https://openrouter.ai/api/v1/models";
+  const DEFAULT_ENDPOINT = "https://openrouter.ai/api/v1";
   const APP_TITLE = "Pocket AI";
 
   const STORE = {
@@ -17,10 +16,13 @@
     model: "pocketai.model",
     theme: "pocketai.theme",
     models: "pocketai.modelcache",
+    endpoint: "pocketai.endpoint",
+    fallback: "pocketai.fallback",
+    favorites: "pocketai.favorites",
+    autoread: "pocketai.autoread",
   };
 
-  // Curated fallback list. The live /models endpoint (Settings → Refresh)
-  // adds the rest. "Custom…" always lets you paste any model id.
+  // Curated fallback list, used until the live /models endpoint is loaded.
   const CURATED = [
     { group: "Free", id: "deepseek/deepseek-chat-v3-0324:free", name: "DeepSeek V3 (free)" },
     { group: "Free", id: "deepseek/deepseek-r1:free", name: "DeepSeek R1 · reasoning (free)" },
@@ -33,7 +35,7 @@
     { group: "Premium", id: "google/gemini-2.0-flash-001", name: "Gemini 2.0 Flash" },
   ];
   const DEFAULT_MODEL = "deepseek/deepseek-chat-v3-0324:free";
-  const CUSTOM_VALUE = "__custom__";
+  const MODEL_LIST_CAP = 250;
 
   /* ------------------------- Tiny helpers -------------------------------- */
   const $ = (id) => document.getElementById(id);
@@ -57,13 +59,18 @@
   /* ------------------------------- State --------------------------------- */
   let state = {
     apiKey: load(STORE.key, ""),
-    chats: load(STORE.chats, []),      // [{id, title, messages:[{role,content}], updated}]
+    chats: load(STORE.chats, []),
     currentId: load(STORE.current, null),
     model: load(STORE.model, DEFAULT_MODEL),
-    models: load(STORE.models, null),  // cached live list or null
+    models: load(STORE.models, null),
+    endpoint: load(STORE.endpoint, DEFAULT_ENDPOINT),
+    fallbackModel: load(STORE.fallback, ""),
+    favorites: load(STORE.favorites, []),
+    autoRead: load(STORE.autoread, false),
   };
-  let controller = null;   // AbortController for the in-flight request
+  let controller = null;       // AbortController for the in-flight request
   let streaming = false;
+  let pendingImage = null;     // data URL of an attached image (not persisted until sent)
 
   /* --------------------------- DOM references ---------------------------- */
   const dom = {
@@ -73,29 +80,56 @@
     form: $("composerForm"),
     sendBtn: $("sendBtn"),
     hint: $("composerHint"),
-    modelSelect: $("modelSelect"),
-    modelCustom: $("modelCustom"),
+    micBtn: $("micBtn"),
+    attachBtn: $("attachBtn"),
+    fileInput: $("fileInput"),
+    attachPreview: $("attachPreview"),
     newChat: $("newChatBtn"),
     menuBtn: $("menuBtn"),
     backdrop: $("backdrop"),
     themeBtn: $("themeBtn"),
     settingsBtn: $("settingsBtn"),
+    // model picker
+    modelBtn: $("modelBtn"),
+    modelBtnLabel: $("modelBtnLabel"),
+    modelModal: $("modelModal"),
+    modelModalClose: $("modelModalClose"),
+    modelSearch: $("modelSearch"),
+    modelFreeOnly: $("modelFreeOnly"),
+    modelList: $("modelList"),
+    modelCount: $("modelCount"),
+    modelCustomInput: $("modelCustomInput"),
+    modelUseCustom: $("modelUseCustom"),
+    // settings
     settingsModal: $("settingsModal"),
     settingsClose: $("settingsClose"),
     settingsSave: $("settingsSave"),
     apiKeyInput: $("apiKeyInput"),
     keyReveal: $("keyReveal"),
     keyStatus: $("keyStatus"),
+    endpointInput: $("endpointInput"),
+    fallbackInput: $("fallbackInput"),
+    autoReadToggle: $("autoReadToggle"),
     refreshModels: $("refreshModels"),
     modelsInfo: $("modelsInfo"),
     clearAll: $("clearAll"),
     toast: $("toast"),
   };
 
-  /* ============================ Markdown ================================= */
-  /* A small, safe markdown renderer. HTML is escaped first, so no user or
-     model content can inject markup. Returns an HTML string.               */
+  /* ---------------------- Endpoint / URL helpers ------------------------- */
+  function normEndpoint(u) {
+    u = (u || "").trim().replace(/\/+$/, "");
+    return u || DEFAULT_ENDPOINT;
+  }
+  const chatUrl = () => normEndpoint(state.endpoint) + "/chat/completions";
+  const modelsApiUrl = () => normEndpoint(state.endpoint) + "/models";
+  function authHeaders(json) {
+    const h = { Authorization: `Bearer ${state.apiKey}`, "X-Title": APP_TITLE };
+    if (json) h["Content-Type"] = "application/json";
+    return h;
+  }
 
+  /* ============================ Markdown ================================= */
   function escapeHtml(s) {
     return s
       .replace(/&/g, "&amp;")
@@ -114,52 +148,40 @@
       codes.push(c);
       return "\u0000" + (codes.length - 1) + "\u0000";
     });
-    // links [text](url)
     s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
       (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
-    // bold, italic, strikethrough
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
     s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
     s = s.replace(/(^|[\s(])_([^_\n]+)_/g, "$1<em>$2</em>");
     s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-    // restore inline code
     s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
     return s;
   }
 
-  // Escapes for use inside an HTML attribute value.
-  function escapeAttr(s) {
-    return escapeHtml(s);
-  }
+  const escapeAttr = escapeHtml;
 
   function renderMarkdown(src) {
     const lines = (src || "").replace(/\r\n/g, "\n").split("\n");
     let html = "";
     let i = 0;
-
     const flushParagraph = (buf) => {
       if (buf.length) html += `<p>${renderInline(buf.join(" "))}</p>`;
       return [];
     };
-
     let para = [];
 
     while (i < lines.length) {
       const line = lines[i];
 
-      // Fenced code block
       const fence = line.match(/^\s*```(.*)$/);
       if (fence) {
         para = flushParagraph(para);
         const lang = fence[1].trim();
         const code = [];
         i++;
-        while (i < lines.length && !/^\s*```/.test(lines[i])) {
-          code.push(lines[i]);
-          i++;
-        }
-        i++; // consume closing fence
+        while (i < lines.length && !/^\s*```/.test(lines[i])) { code.push(lines[i]); i++; }
+        i++;
         const raw = code.join("\n");
         const label = lang || "code";
         html +=
@@ -173,37 +195,19 @@
         continue;
       }
 
-      // Headings
       const h = line.match(/^(#{1,3})\s+(.*)$/);
-      if (h) {
-        para = flushParagraph(para);
-        const lvl = h[1].length;
-        html += `<h${lvl}>${renderInline(h[2])}</h${lvl}>`;
-        i++;
-        continue;
-      }
+      if (h) { para = flushParagraph(para); const lvl = h[1].length; html += `<h${lvl}>${renderInline(h[2])}</h${lvl}>`; i++; continue; }
 
-      // Horizontal rule
-      if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
-        para = flushParagraph(para);
-        html += "<hr />";
-        i++;
-        continue;
-      }
+      if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { para = flushParagraph(para); html += "<hr />"; i++; continue; }
 
-      // Blockquote
       if (/^\s*>\s?/.test(line)) {
         para = flushParagraph(para);
         const quote = [];
-        while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
-          quote.push(lines[i].replace(/^\s*>\s?/, ""));
-          i++;
-        }
+        while (i < lines.length && /^\s*>\s?/.test(lines[i])) { quote.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
         html += `<blockquote>${renderInline(quote.join(" "))}</blockquote>`;
         continue;
       }
 
-      // Lists (unordered / ordered)
       if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
         para = flushParagraph(para);
         const ordered = /^\s*\d+\.\s+/.test(line);
@@ -218,14 +222,8 @@
         continue;
       }
 
-      // Blank line ends a paragraph
-      if (/^\s*$/.test(line)) {
-        para = flushParagraph(para);
-        i++;
-        continue;
-      }
+      if (/^\s*$/.test(line)) { para = flushParagraph(para); i++; continue; }
 
-      // Otherwise accumulate paragraph text
       para.push(line.trim());
       i++;
     }
@@ -233,8 +231,48 @@
     return html;
   }
 
-  /* ============================ Rendering ================================ */
+  // Plain-text extraction from markdown, for text-to-speech.
+  function stripMarkdown(md) {
+    return (md || "")
+      .replace(/```[\s\S]*?```/g, ". code block. ")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+      .replace(/[*_~>#]/g, "")
+      .replace(/\n{2,}/g, ". ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
 
+  /* -------------------- Message content helpers -------------------------- */
+  // A message's content is either a plain string, or an array of parts
+  // ({type:"text",text} / {type:"image_url",image_url:{url}}) for vision.
+  function msgText(content) {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content.filter((p) => p.type === "text").map((p) => p.text).join(" ");
+    }
+    return "";
+  }
+  function msgImages(content) {
+    if (Array.isArray(content)) {
+      return content.filter((p) => p.type === "image_url")
+        .map((p) => p.image_url && p.image_url.url).filter(Boolean);
+    }
+    return [];
+  }
+  function buildUserContent(text, imageDataUrl) {
+    if (imageDataUrl) {
+      const parts = [];
+      if (text) parts.push({ type: "text", text });
+      parts.push({ type: "image_url", image_url: { url: imageDataUrl } });
+      return parts;
+    }
+    return text;
+  }
+
+  /* ============================ Rendering ================================ */
   function currentChat() {
     return state.chats.find((c) => c.id === state.currentId) || null;
   }
@@ -257,16 +295,10 @@
       del.setAttribute("aria-label", "Delete conversation");
       del.innerHTML =
         `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1 11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 9z"/></svg>`;
-      del.addEventListener("click", (e) => {
-        e.stopPropagation();
-        deleteChat(chat.id);
-      });
+      del.addEventListener("click", (e) => { e.stopPropagation(); deleteChat(chat.id); });
       item.appendChild(title);
       item.appendChild(del);
-      item.addEventListener("click", () => {
-        selectChat(chat.id);
-        closeSidebar();
-      });
+      item.addEventListener("click", () => { selectChat(chat.id); closeSidebar(); });
       dom.chatList.appendChild(item);
     }
   }
@@ -276,23 +308,14 @@
     wrap.innerHTML =
       `<div class="logo"><svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path fill="currentColor" d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg></div>` +
       `<h1>How can I help?</h1>` +
-      `<p>Ask anything. Your chats and API key stay on this device.</p>`;
+      `<p>Ask anything, speak it, or attach a photo. Your chats and key stay on this device.</p>`;
     const chips = el("div", "chips");
-    const prompts = [
-      "Explain a tricky concept simply",
-      "Write a short poem",
-      "Debug this code",
-      "Plan my week",
-    ];
-    prompts.forEach((p) => {
+    ["Explain a tricky concept simply", "Write a short poem", "Debug this code", "Plan my week"].forEach((p) => {
       const chip = el("button", "chip");
       chip.type = "button";
       chip.textContent = p;
       chip.addEventListener("click", () => {
-        dom.input.value = p;
-        autoGrow();
-        dom.input.focus();
-        updateSendState();
+        dom.input.value = p; autoGrow(); dom.input.focus(); updateSendState();
       });
       chips.appendChild(chip);
     });
@@ -316,19 +339,42 @@
   function buildMessageRow(role, content) {
     const row = el("div", `msg-row ${role === "user" ? "user" : "ai"}`);
     const bubble = el("div", "bubble");
+
     if (role === "user") {
-      bubble.textContent = content;
+      const imgs = msgImages(content);
+      imgs.forEach((url) => {
+        const im = el("img", "bubble-img");
+        im.src = url; im.alt = "attached image"; im.loading = "lazy";
+        bubble.appendChild(im);
+      });
+      const text = msgText(content);
+      if (text) {
+        const t = el("div", "bubble-text");
+        t.textContent = text;
+        bubble.appendChild(t);
+      }
       row.appendChild(bubble);
     } else {
-      bubble.innerHTML = renderMarkdown(content);
+      const text = msgText(content);
+      bubble.innerHTML = renderMarkdown(text);
       row.appendChild(bubble);
+
       const tools = el("div", "msg-tools");
       const copyBtn = el("button", "msg-tool-btn");
       copyBtn.type = "button";
       copyBtn.innerHTML =
         `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M9 3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.5L14.5 3H9zm5 1.5L17.5 8H14V4.5zM5 7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-1H5V7z"/></svg> Copy`;
-      copyBtn.addEventListener("click", () => copyText(content, copyBtn));
+      copyBtn.addEventListener("click", () => copyText(text, copyBtn));
       tools.appendChild(copyBtn);
+
+      if (ttsSupported()) {
+        const speakBtn = el("button", "msg-tool-btn");
+        speakBtn.type = "button";
+        speakBtn.innerHTML =
+          `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M4 9v6h4l5 5V4L8 9H4zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zm-2.5-9v2.1a7 7 0 0 1 0 13.8V21a9 9 0 0 0 0-18z"/></svg> <span>Read</span>`;
+        speakBtn.addEventListener("click", () => speak(text, speakBtn));
+        tools.appendChild(speakBtn);
+      }
       row.appendChild(tools);
     }
     return row;
@@ -341,14 +387,12 @@
   }
 
   /* ========================= Chat management ============================= */
-
   function persist() {
     save(STORE.chats, state.chats);
     save(STORE.current, state.currentId);
   }
 
   function newChat(focus) {
-    // Reuse an existing empty chat instead of piling up blanks.
     const existingEmpty = state.chats.find((c) => c.messages.length === 0);
     if (existingEmpty) {
       state.currentId = existingEmpty.id;
@@ -373,9 +417,7 @@
 
   function deleteChat(id) {
     state.chats = state.chats.filter((c) => c.id !== id);
-    if (state.currentId === id) {
-      state.currentId = state.chats.length ? state.chats[0].id : null;
-    }
+    if (state.currentId === id) state.currentId = state.chats.length ? state.chats[0].id : null;
     persist();
     renderChatList();
     if (!state.chats.length) newChat(false);
@@ -388,33 +430,83 @@
   }
 
   function titleFrom(text) {
-    const t = text.trim().replace(/\s+/g, " ");
+    const t = (text || "").trim().replace(/\s+/g, " ");
     return t.length > 42 ? t.slice(0, 42) + "…" : t || "New chat";
   }
 
-  /* ========================= OpenRouter calls =========================== */
+  /* ========================= Streaming call ============================= */
+  // Streams one completion for `model` into `bubble`, accumulating into
+  // out.text. Throws on HTTP error or abort.
+  async function streamChat(model, messages, bubble, signal, out) {
+    out.text = "";
+    let firstToken = true;
+    bubble.classList.remove("error-bubble");
+    bubble.innerHTML = `<span class="typing"><span></span><span></span><span></span></span>`;
+
+    const res = await fetch(chatUrl(), {
+      method: "POST",
+      signal,
+      headers: authHeaders(true),
+      body: JSON.stringify({ model, stream: true, messages }),
+    });
+    if (!res.ok) throw new Error(await safeErr(res));
+    if (!res.body) throw new Error("Streaming not supported by this response.");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === "[DONE]") continue;
+        try {
+          const json = JSON.parse(data);
+          const delta = json.choices?.[0]?.delta?.content;
+          if (delta) {
+            if (firstToken) { firstToken = false; bubble.innerHTML = ""; }
+            out.text += delta;
+            bubble.innerHTML = renderMarkdown(out.text);
+            bubble.classList.add("cursor-blink");
+            scrollToBottom(false);
+          }
+        } catch { /* keep-alive / partial frame */ }
+      }
+    }
+    bubble.classList.remove("cursor-blink");
+    return out.text;
+  }
 
   async function sendMessage(text) {
     if (!state.apiKey) {
       openSettings();
-      setHint("Add your OpenRouter API key to start chatting.", true);
+      setHint("Add your API key in Settings to start chatting.", true);
       return;
     }
+    const image = pendingImage;
+    if (!text && !image) return;
+
     const chat = ensureChat();
     const wasEmpty = chat.messages.length === 0;
+    const content = buildUserContent(text, image);
 
-    chat.messages.push({ role: "user", content: text });
-    if (wasEmpty) chat.title = titleFrom(text);
+    chat.messages.push({ role: "user", content });
+    if (wasEmpty) chat.title = titleFrom(text || (image ? "📷 Image" : ""));
     chat.updated = Date.now();
+    clearPendingImage();
     persist();
     renderChatList();
 
-    // Render user bubble (clear welcome if present)
     if (wasEmpty) dom.messages.innerHTML = "";
-    dom.messages.appendChild(buildMessageRow("user", text));
+    dom.messages.appendChild(buildMessageRow("user", content));
     scrollToBottom(true);
 
-    // Prepare an AI bubble with a typing indicator
     const aiRow = el("div", "msg-row ai");
     const bubble = el("div", "bubble");
     bubble.innerHTML = `<span class="typing"><span></span><span></span><span></span></span>`;
@@ -423,84 +515,41 @@
     scrollToBottom(true);
 
     setStreaming(true);
-    let answer = "";
-    let firstToken = true;
+    controller = new AbortController();
+    const payload = chat.messages.map((m) => ({ role: m.role, content: m.content }));
+    const out = { text: "" };
+    let usedFallback = false;
 
     try {
-      controller = new AbortController();
-      const res = await fetch(API_URL, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${state.apiKey}`,
-          "X-Title": APP_TITLE,
-        },
-        body: JSON.stringify({
-          model: state.model,
-          stream: true,
-          messages: chat.messages.map((m) => ({ role: m.role, content: m.content })),
-        }),
-      });
-
-      if (!res.ok) {
-        const detail = await safeErr(res);
-        throw new Error(detail);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        // SSE frames are separated by newlines; parse "data:" lines.
-        const lines = buffer.split("\n");
-        buffer = lines.pop(); // keep the incomplete tail
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data:")) continue;
-          const data = trimmed.slice(5).trim();
-          if (data === "[DONE]") continue;
-          try {
-            const json = JSON.parse(data);
-            const delta = json.choices?.[0]?.delta?.content;
-            if (delta) {
-              if (firstToken) { firstToken = false; bubble.innerHTML = ""; }
-              answer += delta;
-              bubble.innerHTML = renderMarkdown(answer);
-              bubble.classList.add("cursor-blink");
-              scrollToBottom(false);
-            }
-          } catch { /* ignore keep-alive / partial frames */ }
+      try {
+        await streamChat(state.model, payload, bubble, controller.signal, out);
+      } catch (err) {
+        if (err.name === "AbortError") throw err;
+        const fb = (state.fallbackModel || "").trim();
+        if (fb && fb !== state.model) {
+          showToast("Primary failed — trying fallback");
+          await streamChat(fb, payload, bubble, controller.signal, out);
+          usedFallback = true;
+        } else {
+          throw err;
         }
       }
 
+      let answer = out.text;
+      if (!answer.trim()) answer = "_(No content returned. Try another model or check your credits.)_";
+      if (usedFallback) answer = `_↪ answered by fallback: ${state.fallbackModel}_\n\n` + answer;
       bubble.classList.remove("cursor-blink");
-
-      if (!answer.trim()) {
-        answer = "_(No content returned. Try another model or check your OpenRouter credits.)_";
-        bubble.innerHTML = renderMarkdown(answer);
-      }
-
-      // Finalize: rebuild row so it gets its copy button
+      bubble.innerHTML = renderMarkdown(answer);
       finalizeAiMessage(chat, answer, aiRow);
+      if (state.autoRead) speak(answer, null);
     } catch (err) {
       bubble.classList.remove("cursor-blink");
       if (err.name === "AbortError") {
-        if (answer.trim()) {
-          finalizeAiMessage(chat, answer, aiRow);
-        } else {
-          aiRow.remove();
-        }
+        if (out.text.trim()) finalizeAiMessage(chat, out.text, aiRow);
+        else aiRow.remove();
       } else {
-        const msg = "⚠️ " + (err.message || "Something went wrong.");
         bubble.classList.add("error-bubble");
-        bubble.innerHTML = renderMarkdown(msg);
-        // Do not persist error bubbles into history.
+        bubble.innerHTML = renderMarkdown("⚠️ " + (err.message || "Something went wrong."));
       }
     } finally {
       setStreaming(false);
@@ -513,8 +562,7 @@
     chat.updated = Date.now();
     persist();
     renderChatList();
-    const fresh = buildMessageRow("assistant", answer);
-    aiRow.replaceWith(fresh);
+    aiRow.replaceWith(buildMessageRow("assistant", answer));
     scrollToBottom(false);
   }
 
@@ -523,6 +571,7 @@
     try {
       const j = await res.json();
       text = j?.error?.message || j?.error || "";
+      if (typeof text === "object") text = JSON.stringify(text);
     } catch { /* not json */ }
     if (res.status === 401) return "Invalid API key (401). Check it in Settings.";
     if (res.status === 402) return "Out of credits (402). Add credits or pick a free model.";
@@ -531,9 +580,7 @@
   }
 
   function stopStreaming() {
-    if (controller) {
-      try { controller.abort(); } catch {}
-    }
+    if (controller) { try { controller.abort(); } catch {} }
   }
 
   function setStreaming(on) {
@@ -543,116 +590,288 @@
   }
 
   /* ============================ Models ================================== */
+  function modelSource() {
+    if (state.models && state.models.length) return state.models;
+    return CURATED.map((m) => ({
+      id: m.id, name: m.name, free: m.group === "Free",
+      prompt: null, completion: null, context: null,
+    }));
+  }
 
-  function buildModelOptions() {
-    const sel = dom.modelSelect;
-    sel.innerHTML = "";
+  function modelLabel(id) {
+    const src = modelSource();
+    const m = src.find((x) => x.id === id);
+    if (m) return m.name || m.id;
+    return id;
+  }
+  function updateModelButton() {
+    dom.modelBtnLabel.textContent = modelLabel(state.model);
+    dom.modelBtnLabel.title = state.model;
+  }
 
-    const addOption = (parent, id, label) => {
-      const o = el("option");
-      o.value = id;
-      o.textContent = label;
-      parent.appendChild(o);
-    };
-    const addGroup = (label) => {
-      const g = el("optgroup");
-      g.label = label;
-      sel.appendChild(g);
-      return g;
-    };
+  function priceLabel(m) {
+    if (m.free) return "Free";
+    if (m.prompt == null) return "";
+    const inM = m.prompt * 1e6, outM = m.completion * 1e6;
+    const f = (n) => n >= 1 ? n.toFixed(2) : n >= 0.01 ? n.toFixed(2) : n.toFixed(3);
+    return `$${f(inM)} in / $${f(outM)} out per 1M`;
+  }
 
-    if (state.models && state.models.length) {
-      // Live list, split into Free and Paid, capped for usability.
-      const free = state.models.filter((m) => m.free);
-      const paid = state.models.filter((m) => !m.free);
-      const fg = addGroup(`Free models (${free.length})`);
-      free.slice(0, 60).forEach((m) => addOption(fg, m.id, m.name));
-      const pg = addGroup(`Other models (${paid.length})`);
-      paid.slice(0, 120).forEach((m) => addOption(pg, m.id, m.name));
-    } else {
-      const groups = {};
-      for (const m of CURATED) {
-        groups[m.group] = groups[m.group] || addGroup(m.group + " models");
-        addOption(groups[m.group], m.id, m.name);
+  function selectModel(id) {
+    if (!id) return;
+    state.model = id;
+    save(STORE.model, id);
+    updateModelButton();
+    closeModelModal();
+  }
+
+  function toggleFavorite(id) {
+    const i = state.favorites.indexOf(id);
+    if (i >= 0) state.favorites.splice(i, 1);
+    else state.favorites.unshift(id);
+    save(STORE.favorites, state.favorites);
+    renderModelList();
+  }
+
+  function renderModelList() {
+    const term = (dom.modelSearch.value || "").toLowerCase().trim();
+    const freeOnly = dom.modelFreeOnly.checked;
+    const favs = new Set(state.favorites);
+    const src = modelSource();
+
+    let items = src.filter((m) => {
+      if (freeOnly && !m.free) return false;
+      if (term && !(m.id.toLowerCase().includes(term) || (m.name || "").toLowerCase().includes(term))) return false;
+      return true;
+    });
+    items.sort((a, b) => {
+      const fa = favs.has(a.id), fb = favs.has(b.id);
+      if (fa !== fb) return fa ? -1 : 1;
+      return (a.name || a.id).localeCompare(b.name || b.id);
+    });
+
+    const shown = items.slice(0, MODEL_LIST_CAP);
+    dom.modelList.innerHTML = "";
+    if (!shown.length) {
+      const e = el("div", "model-empty");
+      e.textContent = "No models match. Try a different search, or use a custom id below.";
+      dom.modelList.appendChild(e);
+    }
+    for (const m of shown) {
+      const row = el("div", "model-row" + (m.id === state.model ? " selected" : ""));
+
+      const star = el("button", "model-star" + (favs.has(m.id) ? " on" : ""));
+      star.type = "button";
+      star.textContent = favs.has(m.id) ? "★" : "☆";
+      star.setAttribute("aria-label", favs.has(m.id) ? "Unfavorite" : "Favorite");
+      star.addEventListener("click", (e) => { e.stopPropagation(); toggleFavorite(m.id); });
+
+      const info = el("div", "model-info");
+      const nm = el("div", "model-name");
+      nm.textContent = m.name || m.id;
+      const meta = el("div", "model-meta");
+      const idspan = el("span", "model-id");
+      idspan.textContent = m.id;
+      meta.appendChild(idspan);
+      const price = priceLabel(m);
+      if (price) {
+        const pb = el("span", "model-price" + (m.free ? " free" : ""));
+        pb.textContent = price;
+        meta.appendChild(pb);
       }
+      if (m.context) {
+        const cb = el("span", "model-ctx");
+        cb.textContent = Math.round(m.context / 1000) + "K ctx";
+        meta.appendChild(cb);
+      }
+      info.appendChild(nm);
+      info.appendChild(meta);
+
+      row.appendChild(star);
+      row.appendChild(info);
+      row.addEventListener("click", () => selectModel(m.id));
+      dom.modelList.appendChild(row);
     }
-
-    // Make sure the current model is selectable even if not in the list.
-    const known = Array.from(sel.querySelectorAll("option")).some((o) => o.value === state.model);
-    if (!known && state.model) {
-      const g = addGroup("Current");
-      addOption(g, state.model, state.model);
-    }
-
-    // Custom entry option
-    const cg = addGroup("—");
-    addOption(cg, CUSTOM_VALUE, "Custom model id…");
-
-    sel.value = state.model;
-    dom.modelCustom.hidden = true;
-    dom.modelCustom.style.display = "none";
-    dom.modelSelect.style.display = "";
+    dom.modelCount.textContent =
+      `${items.length} model${items.length === 1 ? "" : "s"}` +
+      (items.length > MODEL_LIST_CAP ? ` · showing ${MODEL_LIST_CAP}` : "");
   }
 
-  function onModelChange() {
-    const v = dom.modelSelect.value;
-    if (v === CUSTOM_VALUE) {
-      dom.modelSelect.style.display = "none";
-      dom.modelCustom.hidden = false;
-      dom.modelCustom.style.display = "";
-      dom.modelCustom.value = "";
-      dom.modelCustom.focus();
-      return;
-    }
-    state.model = v;
-    save(STORE.model, v);
+  function openModelModal() {
+    dom.modelModal.hidden = false;
+    dom.modelCustomInput.value = "";
+    renderModelList();
+    // Pull the live list the first time (public endpoint; no key required).
+    if (!state.models) refreshModels();
+    setTimeout(() => dom.modelSearch.focus(), 30);
   }
-
-  function commitCustomModel() {
-    const v = dom.modelCustom.value.trim();
-    if (v) {
-      state.model = v;
-      save(STORE.model, v);
-      buildModelOptions();
-    } else {
-      // revert to select
-      dom.modelCustom.hidden = true;
-      dom.modelCustom.style.display = "none";
-      dom.modelSelect.style.display = "";
-      dom.modelSelect.value = state.model;
-    }
-  }
+  function closeModelModal() { dom.modelModal.hidden = true; }
 
   async function refreshModels() {
-    dom.modelsInfo.textContent = "Loading models…";
+    if (dom.modelsInfo) dom.modelsInfo.textContent = "Loading models…";
     try {
       const headers = {};
       if (state.apiKey) headers.Authorization = `Bearer ${state.apiKey}`;
-      const res = await fetch(MODELS_URL, { headers });
+      const res = await fetch(modelsApiUrl(), { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const list = (json.data || [])
         .map((m) => {
           const p = m.pricing || {};
-          const free =
-            (parseFloat(p.prompt) || 0) === 0 &&
-            (parseFloat(p.completion) || 0) === 0;
-          return { id: m.id, name: m.name || m.id, free };
+          const prompt = parseFloat(p.prompt) || 0;
+          const completion = parseFloat(p.completion) || 0;
+          return {
+            id: m.id,
+            name: m.name || m.id,
+            free: prompt === 0 && completion === 0,
+            prompt, completion,
+            context: m.context_length || (m.top_provider && m.top_provider.context_length) || null,
+          };
         })
         .sort((a, b) => a.name.localeCompare(b.name));
       state.models = list;
       save(STORE.models, list);
-      buildModelOptions();
-      dom.modelsInfo.textContent = `Loaded ${list.length} models from OpenRouter.`;
+      updateModelButton();
+      if (!dom.modelModal.hidden) renderModelList();
+      if (dom.modelsInfo) dom.modelsInfo.textContent = `Loaded ${list.length} models.`;
     } catch (err) {
-      dom.modelsInfo.textContent = "Couldn't load models (" + (err.message || "error") + "). Using curated list.";
+      if (dom.modelsInfo) dom.modelsInfo.textContent =
+        "Couldn't load models (" + (err.message || "error") + "). Using the built-in list.";
     }
   }
 
-  /* ============================ Settings ================================ */
+  /* ============================ Voice: input ============================ */
+  let recognition = null;
+  let listening = false;
+  let micBase = "";
 
+  const speechSupported = () => !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  function setupRecognition() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SR();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = navigator.language || "en-US";
+    recognition.onresult = (e) => {
+      let txt = "";
+      for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
+      dom.input.value = (micBase ? micBase + " " : "") + txt;
+      autoGrow();
+      updateSendState();
+    };
+    recognition.onend = () => { listening = false; dom.micBtn.classList.remove("active"); };
+    recognition.onerror = (e) => {
+      listening = false;
+      dom.micBtn.classList.remove("active");
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") showToast("Microphone permission denied");
+      else if (e.error === "no-speech") showToast("Didn't catch that — try again");
+    };
+  }
+
+  function toggleMic() {
+    if (!speechSupported()) { showToast("Voice input isn't supported in this browser"); return; }
+    if (!recognition) setupRecognition();
+    if (listening) { try { recognition.stop(); } catch {} return; }
+    micBase = dom.input.value.trim();
+    try {
+      recognition.start();
+      listening = true;
+      dom.micBtn.classList.add("active");
+    } catch { /* start() throws if already active */ }
+  }
+
+  /* ============================ Voice: output =========================== */
+  let speakingBtn = null;
+  const ttsSupported = () => "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+
+  function speak(md, btn) {
+    if (!ttsSupported()) return;
+    const synth = window.speechSynthesis;
+    if (synth.speaking || synth.pending) {
+      synth.cancel();
+      const wasSame = speakingBtn === btn;
+      if (speakingBtn) speakingBtn.classList.remove("speaking");
+      speakingBtn = null;
+      if (wasSame) return; // clicking the active button stops it
+    }
+    const text = stripMarkdown(md);
+    if (!text) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = navigator.language || "en-US";
+    const clear = () => { if (btn) btn.classList.remove("speaking"); if (speakingBtn === btn) speakingBtn = null; };
+    u.onend = clear;
+    u.onerror = clear;
+    if (btn) btn.classList.add("speaking");
+    speakingBtn = btn;
+    synth.speak(u);
+  }
+
+  /* ============================ Vision: attach ========================== */
+  function fileToDownscaledDataURL(file, maxDim = 1024, quality = 0.85) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width >= height) { height = Math.round(height * maxDim / width); width = maxDim; }
+          else { width = Math.round(width * maxDim / height); height = maxDim; }
+        }
+        const canvas = el("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        try { resolve(canvas.toDataURL("image/jpeg", quality)); }
+        catch (e) { reject(e); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not read that image")); };
+      img.src = url;
+    });
+  }
+
+  async function handleFile(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { showToast("Please choose an image"); return; }
+    try {
+      pendingImage = await fileToDownscaledDataURL(file);
+      showAttachPreview(pendingImage);
+      updateSendState();
+    } catch {
+      showToast("Couldn't process that image");
+    }
+  }
+
+  function showAttachPreview(dataUrl) {
+    dom.attachPreview.innerHTML = "";
+    const thumb = el("div", "attach-thumb");
+    const im = el("img");
+    im.src = dataUrl; im.alt = "attachment preview";
+    thumb.appendChild(im);
+    const rm = el("button", "attach-remove");
+    rm.type = "button";
+    rm.textContent = "✕";
+    rm.setAttribute("aria-label", "Remove image");
+    rm.addEventListener("click", clearPendingImage);
+    thumb.appendChild(rm);
+    dom.attachPreview.appendChild(thumb);
+    dom.attachPreview.hidden = false;
+  }
+
+  function clearPendingImage() {
+    pendingImage = null;
+    dom.attachPreview.hidden = true;
+    dom.attachPreview.innerHTML = "";
+    dom.fileInput.value = "";
+    updateSendState();
+  }
+
+  /* ============================ Settings ================================ */
   function openSettings() {
     dom.apiKeyInput.value = state.apiKey || "";
+    dom.endpointInput.value = state.endpoint || DEFAULT_ENDPOINT;
+    dom.fallbackInput.value = state.fallbackModel || "";
+    dom.autoReadToggle.checked = !!state.autoRead;
     dom.keyStatus.textContent = "";
     dom.keyStatus.className = "field-status";
     dom.settingsModal.hidden = false;
@@ -660,16 +879,31 @@
   function closeSettings() { dom.settingsModal.hidden = true; }
 
   function saveSettings() {
-    const key = dom.apiKeyInput.value.trim();
-    state.apiKey = key;
-    save(STORE.key, key);
+    state.apiKey = dom.apiKeyInput.value.trim();
+    save(STORE.key, state.apiKey);
+
+    const newEndpoint = normEndpoint(dom.endpointInput.value);
+    if (newEndpoint !== normEndpoint(state.endpoint)) {
+      // Endpoint changed — cached models are from the old provider.
+      state.models = null;
+      save(STORE.models, null);
+    }
+    state.endpoint = newEndpoint;
+    save(STORE.endpoint, newEndpoint);
+
+    state.fallbackModel = dom.fallbackInput.value.trim();
+    save(STORE.fallback, state.fallbackModel);
+
+    state.autoRead = dom.autoReadToggle.checked;
+    save(STORE.autoread, state.autoRead);
+
+    updateModelButton();
     closeSettings();
-    if (key) setHint("");
+    if (state.apiKey) setHint("");
     showToast("Settings saved");
   }
 
   /* ============================= Theme ================================= */
-
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
     save(STORE.theme, theme);
@@ -677,8 +911,7 @@
   function initTheme() {
     const saved = load(STORE.theme, null);
     if (saved) { applyTheme(saved); return; }
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    applyTheme(prefersDark ? "dark" : "light");
+    applyTheme(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   }
   function toggleTheme() {
     const cur = document.documentElement.getAttribute("data-theme");
@@ -686,14 +919,13 @@
   }
 
   /* ============================ UI utils =============================== */
-
   function autoGrow() {
     dom.input.style.height = "auto";
     dom.input.style.height = Math.min(dom.input.scrollHeight, 180) + "px";
   }
   function updateSendState() {
     if (streaming) { dom.sendBtn.disabled = false; return; }
-    dom.sendBtn.disabled = dom.input.value.trim().length === 0;
+    dom.sendBtn.disabled = dom.input.value.trim().length === 0 && !pendingImage;
   }
   function setHint(text, isError) {
     dom.hint.innerHTML = text;
@@ -705,7 +937,7 @@
     dom.toast.textContent = msg;
     dom.toast.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { dom.toast.hidden = true; }, 1800);
+    toastTimer = setTimeout(() => { dom.toast.hidden = true; }, 1900);
   }
 
   async function copyText(text, btn) {
@@ -728,23 +960,16 @@
     }
   }
 
-  function openSidebar() {
-    document.body.classList.add("sidebar-open");
-    dom.backdrop.hidden = false;
-  }
-  function closeSidebar() {
-    document.body.classList.remove("sidebar-open");
-    dom.backdrop.hidden = true;
-  }
+  function openSidebar() { document.body.classList.add("sidebar-open"); dom.backdrop.hidden = false; }
+  function closeSidebar() { document.body.classList.remove("sidebar-open"); dom.backdrop.hidden = true; }
 
   /* ============================== Events =============================== */
-
   function wireEvents() {
     dom.form.addEventListener("submit", (e) => {
       e.preventDefault();
       if (streaming) { stopStreaming(); return; }
       const text = dom.input.value.trim();
-      if (!text) return;
+      if (!text && !pendingImage) return;
       dom.input.value = "";
       autoGrow();
       updateSendState();
@@ -753,25 +978,35 @@
 
     dom.input.addEventListener("input", () => { autoGrow(); updateSendState(); });
     dom.input.addEventListener("keydown", (e) => {
-      // Enter to send on desktop; Shift+Enter for newline. On touch, newline.
-      if (e.key === "Enter" && !e.shiftKey && !isTouch()) {
-        e.preventDefault();
-        dom.form.requestSubmit();
-      }
+      if (e.key === "Enter" && !e.shiftKey && !isTouch()) { e.preventDefault(); dom.form.requestSubmit(); }
     });
 
     dom.newChat.addEventListener("click", () => { newChat(true); closeSidebar(); });
     dom.menuBtn.addEventListener("click", openSidebar);
     dom.backdrop.addEventListener("click", closeSidebar);
-
     dom.themeBtn.addEventListener("click", toggleTheme);
 
+    // Voice + attach
+    dom.micBtn.addEventListener("click", toggleMic);
+    dom.attachBtn.addEventListener("click", () => dom.fileInput.click());
+    dom.fileInput.addEventListener("change", (e) => handleFile(e.target.files && e.target.files[0]));
+
+    // Model picker
+    dom.modelBtn.addEventListener("click", openModelModal);
+    dom.modelModalClose.addEventListener("click", closeModelModal);
+    dom.modelModal.addEventListener("click", (e) => { if (e.target === dom.modelModal) closeModelModal(); });
+    dom.modelSearch.addEventListener("input", renderModelList);
+    dom.modelFreeOnly.addEventListener("change", renderModelList);
+    dom.modelUseCustom.addEventListener("click", () => selectModel(dom.modelCustomInput.value.trim()));
+    dom.modelCustomInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); selectModel(dom.modelCustomInput.value.trim()); }
+    });
+
+    // Settings
     dom.settingsBtn.addEventListener("click", openSettings);
     dom.settingsClose.addEventListener("click", closeSettings);
     dom.settingsSave.addEventListener("click", saveSettings);
-    dom.settingsModal.addEventListener("click", (e) => {
-      if (e.target === dom.settingsModal) closeSettings();
-    });
+    dom.settingsModal.addEventListener("click", (e) => { if (e.target === dom.settingsModal) closeSettings(); });
     dom.keyReveal.addEventListener("click", () => {
       const isPw = dom.apiKeyInput.type === "password";
       dom.apiKeyInput.type = isPw ? "text" : "password";
@@ -789,13 +1024,7 @@
       }
     });
 
-    dom.modelSelect.addEventListener("change", onModelChange);
-    dom.modelCustom.addEventListener("blur", commitCustomModel);
-    dom.modelCustom.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); dom.modelCustom.blur(); }
-    });
-
-    // Copy handler for code blocks (event delegation)
+    // Copy handler for code blocks (delegated)
     dom.messages.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-copy]");
       if (!btn) return;
@@ -804,40 +1033,34 @@
     });
 
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        if (!dom.settingsModal.hidden) closeSettings();
-        else closeSidebar();
-      }
+      if (e.key !== "Escape") return;
+      if (!dom.settingsModal.hidden) closeSettings();
+      else if (!dom.modelModal.hidden) closeModelModal();
+      else closeSidebar();
     });
 
     window.addEventListener("beforeunload", () => { if (streaming) stopStreaming(); });
   }
 
-  function isTouch() {
-    return window.matchMedia("(pointer: coarse)").matches;
-  }
+  const isTouch = () => window.matchMedia("(pointer: coarse)").matches;
 
   /* ============================ Startup =============================== */
-
   function init() {
     initTheme();
-    buildModelOptions();
+    updateModelButton();
     renderChatList();
 
-    if (!state.chats.length || !currentChat()) {
-      newChat(false);
-    } else {
-      renderMessages();
-    }
+    if (!state.chats.length || !currentChat()) newChat(false);
+    else renderMessages();
 
     wireEvents();
     updateSendState();
 
-    if (!state.apiKey) {
-      setHint('Tap the gear icon and add your OpenRouter API key to begin.');
-    }
+    // Hide voice-input button where unsupported (e.g. some desktop browsers).
+    if (!speechSupported()) dom.micBtn.hidden = true;
 
-    // Register the service worker for offline / installable app.
+    if (!state.apiKey) setHint("Tap the gear icon and add your OpenRouter API key to begin.");
+
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
         navigator.serviceWorker.register("./sw.js").catch(() => {});
