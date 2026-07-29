@@ -575,7 +575,11 @@
     } catch { /* not json */ }
     if (res.status === 401) return "Invalid API key (401). Check it in Settings.";
     if (res.status === 402) return "Out of credits (402). Add credits or pick a free model.";
-    if (res.status === 429) return "Rate limited (429). Wait a moment and try again.";
+    if (res.status === 429) return "Rate limited (429). Wait a moment, or try another model.";
+    if (res.status === 404) {
+      const base = text || "This model isn't available.";
+      return base + " — tap the model name above and choose a currently-available Free model.";
+    }
     return text ? `${text} (HTTP ${res.status})` : `Request failed (HTTP ${res.status}).`;
   }
 
@@ -738,6 +742,21 @@
       if (dom.modelsInfo) dom.modelsInfo.textContent =
         "Couldn't load models (" + (err.message || "error") + "). Using the built-in list.";
     }
+  }
+
+  // If the selected model has been retired by the provider, quietly switch
+  // to a currently-available free model so the app never dead-ends.
+  async function healModelIfRetired() {
+    if (!state.apiKey) return;
+    await refreshModels();
+    if (!state.models || !state.models.length) return;
+    if (state.models.some((m) => m.id === state.model)) return; // still valid
+    const replacement = state.models.find((m) => m.free) || state.models[0];
+    if (!replacement) return;
+    state.model = replacement.id;
+    save(STORE.model, replacement.id);
+    updateModelButton();
+    showToast("Your model was retired — switched to " + (replacement.name || replacement.id));
   }
 
   /* ============================ Voice: input ============================ */
@@ -1060,6 +1079,7 @@
     if (!speechSupported()) dom.micBtn.hidden = true;
 
     if (!state.apiKey) setHint("Tap the gear icon and add your OpenRouter API key to begin.");
+    else healModelIfRetired();
 
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
