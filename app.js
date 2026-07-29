@@ -41,11 +41,12 @@
   // Default "personality" so the assistant behaves like a friendly chat
   // assistant (ChatGPT/Claude style) instead of dumping code walls.
   const DEFAULT_SYSTEM =
-    "You are Pocket AI, a warm, thoughtful personal assistant. " +
-    "Reply conversationally and clearly in plain language, like a helpful chat assistant. " +
-    "Keep answers focused and easy to read — use short paragraphs or bullet points when they help. " +
-    "Do NOT write long blocks of code or technical implementation details unless the user explicitly asks for code. " +
-    "If a request is unclear, ask one brief clarifying question first. Be encouraging and down to earth.";
+    "You are Pocket AI, a warm, capable personal assistant and creative partner. " +
+    "Help the user make things — writing, plans, ideas, designs, content, and simple code when asked. " +
+    "Reply conversationally in plain language; keep answers focused and easy to read with short paragraphs or bullet points. " +
+    "When the user wants to build or create something, guide them step by step and ask one brief clarifying question if the goal is unclear. " +
+    "Only include code when the user explicitly asks for it, and keep it clean and copy-ready. " +
+    "Be encouraging and down to earth.";
 
   /* ------------------------- Tiny helpers -------------------------------- */
   const $ = (id) => document.getElementById(id);
@@ -324,7 +325,7 @@
       `<h1>How can I help?</h1>` +
       `<p>Ask anything, speak it, or attach a photo. Your chats and key stay on this device.</p>`;
     const chips = el("div", "chips");
-    ["Explain a tricky concept simply", "Write a short poem", "Debug this code", "Plan my week"].forEach((p) => {
+    ["Help me plan a project", "Write a first draft for me", "Brainstorm ideas together", "Explain something simply"].forEach((p) => {
       const chip = el("button", "chip");
       chip.type = "button";
       chip.textContent = p;
