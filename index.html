@@ -114,6 +114,21 @@
     </div>
   </div>
 
+  <!-- Live app preview -->
+  <div class="preview" id="previewModal" hidden>
+    <div class="preview-bar">
+      <span class="preview-title">Live preview</span>
+      <div class="preview-actions">
+        <button class="ghost-btn" id="previewOpen" type="button">Open ↗</button>
+        <button class="ghost-btn" id="previewSave" type="button">Save</button>
+        <button class="icon-btn" id="previewClose" type="button" aria-label="Close preview">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z"/></svg>
+        </button>
+      </div>
+    </div>
+    <iframe id="previewFrame" class="preview-frame" title="App preview" sandbox="allow-scripts allow-modals allow-popups allow-forms"></iframe>
+  </div>
+
   <!-- Skills dialog -->
   <div class="modal" id="skillsModal" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="skillsTitle">

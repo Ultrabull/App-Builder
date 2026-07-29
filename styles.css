@@ -354,6 +354,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 6px;
   padding: 6px 10px 6px 12px;
   background: rgba(255,255,255,0.05);
   color: #9aa4b5;
@@ -639,6 +641,36 @@ body.streaming .ico-stop { display: inline; }
 }
 .danger-btn:hover { background: var(--danger); color: #fff; }
 .danger-btn.wide { width: 100%; }
+
+/* ---------- Live app preview ---------- */
+.preview {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+.preview[hidden] { display: none; }
+.preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  padding-top: max(10px, env(safe-area-inset-top));
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.preview-title { font-weight: 700; font-size: 15px; }
+.preview-actions { display: flex; align-items: center; gap: 6px; }
+.preview-actions .ghost-btn { padding: 7px 12px; font-size: 13px; }
+.preview-frame {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
 
 /* ---------- Backdrop / toast ---------- */
 .backdrop {

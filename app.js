@@ -30,6 +30,7 @@
   // separately and merged in. "General" = base personality only.
   const DEFAULT_SKILLS = [
     { id: "general", emoji: "💬", name: "General", prompt: "" },
+    { id: "builder", emoji: "🛠️", name: "App Builder", prompt: "You are an expert web-app builder. When the user describes an app, tool, game, or page, reply with ONE complete, self-contained HTML document that implements it fully. Put ALL CSS in a <style> tag and ALL JavaScript in a <script> tag, inline. Use NO external files, CDNs, frameworks, or network requests — they are blocked in the preview. Make it clean, responsive, and mobile-friendly. Start with a one-line summary of what you built, then the entire document inside a single ```html code block. When the user asks for changes, return the FULL updated HTML document again, not just the changed part." },
     { id: "writer", emoji: "✍️", name: "Writing coach", prompt: "You are a sharp, encouraging writing partner. Help draft, tighten, and improve writing. Offer a clear version, then note what you changed." },
     { id: "coder", emoji: "💻", name: "Coding buddy", prompt: "You are a concise coding helper. When asked for code, give working, copy-ready snippets with a short explanation. Prefer simple, modern solutions." },
     { id: "chef", emoji: "🍳", name: "Chef", prompt: "You are a friendly home-cooking assistant. Suggest recipes from the ingredients or cravings given, with simple step-by-step instructions and quick substitutions." },
@@ -132,6 +133,12 @@
     memList: $("memList"),
     memInput: $("memInput"),
     memAdd: $("memAdd"),
+    // live preview
+    previewModal: $("previewModal"),
+    previewFrame: $("previewFrame"),
+    previewOpen: $("previewOpen"),
+    previewSave: $("previewSave"),
+    previewClose: $("previewClose"),
     // model picker
     modelBtn: $("modelBtn"),
     modelBtnLabel: $("modelBtnLabel"),
@@ -355,12 +362,20 @@
       `<h1>How can I help?</h1>` +
       `<p>Ask anything, speak it, or attach a photo. Your chats and key stay on this device.</p>`;
     const chips = el("div", "chips");
-    ["Help me plan a project", "Write a first draft for me", "Brainstorm ideas together", "Explain something simply"].forEach((p) => {
+    const prompts = [
+      { t: "🛠️ Build a mini app", build: true },
+      { t: "Help me plan a project" },
+      { t: "Write a first draft for me" },
+      { t: "Brainstorm ideas together" },
+    ];
+    prompts.forEach(({ t, build }) => {
       const chip = el("button", "chip");
       chip.type = "button";
-      chip.textContent = p;
+      chip.textContent = t;
       chip.addEventListener("click", () => {
-        dom.input.value = p; autoGrow(); dom.input.focus(); updateSendState();
+        if (build) { selectSkill("builder"); dom.input.value = "Build a "; }
+        else { dom.input.value = t; }
+        autoGrow(); dom.input.focus(); updateSendState();
       });
       chips.appendChild(chip);
     });
@@ -421,6 +436,7 @@
         tools.appendChild(speakBtn);
       }
       row.appendChild(tools);
+      enhanceCodeBlocks(bubble);
     }
     return row;
   }
@@ -939,6 +955,60 @@
     updateSendState();
   }
 
+  /* ======================= App preview / export ======================= */
+  let previewCode = "";
+  const looksLikeHtmlDoc = (code) => /<!doctype html|<html[\s>]|<body[\s>]/i.test(code || "");
+
+  function previewApp(code) {
+    previewCode = code;
+    // Sandboxed iframe (no allow-same-origin) — the generated app runs
+    // isolated and cannot read this page's storage or your API key.
+    dom.previewFrame.srcdoc = code;
+    dom.previewModal.hidden = false;
+  }
+  function closePreview() {
+    dom.previewModal.hidden = true;
+    dom.previewFrame.srcdoc = "";
+  }
+  const htmlBlobUrl = (code) => URL.createObjectURL(new Blob([code], { type: "text/html" }));
+  function openInTab(code) {
+    const url = htmlBlobUrl(code);
+    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+  function downloadHtml(code) {
+    const a = el("a");
+    a.href = htmlBlobUrl(code);
+    a.download = "app.html";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    showToast("Saved app.html");
+  }
+
+  // Give any full-HTML code block Preview / Open / Save actions.
+  function enhanceCodeBlocks(container) {
+    container.querySelectorAll(".code-block").forEach((block) => {
+      if (block.dataset.enhanced) return;
+      const code = block.getAttribute("data-code") || "";
+      if (!looksLikeHtmlDoc(code)) return;
+      block.dataset.enhanced = "1";
+      const head = block.querySelector(".code-head");
+      if (!head) return;
+      const mk = (label, fn) => {
+        const b = el("button", "code-copy");
+        b.type = "button";
+        b.textContent = label;
+        b.addEventListener("click", fn);
+        return b;
+      };
+      head.appendChild(mk("▶ Preview", () => previewApp(code)));
+      head.appendChild(mk("↗ Open", () => openInTab(code)));
+      head.appendChild(mk("⬇ Save", () => downloadHtml(code)));
+    });
+  }
+
   /* ============================ Skills ================================= */
   function allSkills() { return DEFAULT_SKILLS.concat(state.customSkills); }
   function activeSkill() {
@@ -947,6 +1017,9 @@
   function updateSkillsButton() {
     const s = activeSkill();
     dom.skillsBtnLabel.textContent = s.id === "general" ? "Skills" : `${s.emoji} ${s.name}`;
+    dom.input.placeholder = s.id === "builder"
+      ? "Describe an app to build…"
+      : "Message, or tap the mic…";
   }
 
   function renderSkills() {
@@ -1194,6 +1267,11 @@
     dom.skillsModal.addEventListener("click", (e) => { if (e.target === dom.skillsModal) closeSkillsModal(); });
     dom.skillAdd.addEventListener("click", addCustomSkill);
 
+    // Live preview
+    dom.previewClose.addEventListener("click", closePreview);
+    dom.previewOpen.addEventListener("click", () => openInTab(previewCode));
+    dom.previewSave.addEventListener("click", () => downloadHtml(previewCode));
+
     // Memory
     dom.memAdd.addEventListener("click", () => { addMemory(dom.memInput.value); dom.memInput.value = ""; });
     dom.memInput.addEventListener("keydown", (e) => {
@@ -1254,7 +1332,8 @@
 
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
-      if (!dom.settingsModal.hidden) closeSettings();
+      if (!dom.previewModal.hidden) closePreview();
+      else if (!dom.settingsModal.hidden) closeSettings();
       else if (!dom.modelModal.hidden) closeModelModal();
       else if (!dom.skillsModal.hidden) closeSkillsModal();
       else closeSidebar();
