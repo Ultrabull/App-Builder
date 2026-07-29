@@ -546,6 +546,15 @@ body.streaming .ico-stop { display: inline; }
   outline: none;
 }
 .text-input:focus { border-color: var(--accent); }
+.text-area {
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.45;
+  font-family: inherit;
+}
+.field-row { display: flex; align-items: flex-start; gap: 10px; }
+.field-row .field-help { flex: 1; }
+.field-row .ghost-btn { flex: 0 0 auto; margin-top: 8px; padding: 6px 12px; font-size: 13px; }
 .field-help { font-size: 12.5px; color: var(--text-dim); margin: 8px 0 0; line-height: 1.5; }
 .field-help a { color: var(--accent); }
 .field-status { font-size: 13px; margin-top: 10px; min-height: 18px; }

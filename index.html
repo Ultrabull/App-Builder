@@ -134,6 +134,15 @@
 
         <hr class="divider" />
 
+        <label class="field-label" for="systemInput">Personality &amp; custom instructions</label>
+        <textarea id="systemInput" class="text-input text-area" rows="5" placeholder="Tell the assistant how to behave…"></textarea>
+        <div class="field-row">
+          <p class="field-help">Shapes how the AI replies in every chat. The default keeps answers friendly and plain-language (no code unless you ask).</p>
+          <button class="ghost-btn" id="systemReset" type="button">Reset</button>
+        </div>
+
+        <hr class="divider" />
+
         <label class="field-label" for="endpointInput">API endpoint (base URL)</label>
         <input id="endpointInput" class="text-input" type="text" placeholder="https://openrouter.ai/api/v1" autocomplete="off" spellcheck="false" />
         <p class="field-help">Any OpenAI-compatible endpoint works — OpenRouter, OmniRoute, a local server, etc.</p>

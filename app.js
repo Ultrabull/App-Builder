@@ -20,6 +20,7 @@
     fallback: "pocketai.fallback",
     favorites: "pocketai.favorites",
     autoread: "pocketai.autoread",
+    system: "pocketai.system",
   };
 
   // Curated fallback list, used until the live /models endpoint is loaded.
@@ -36,6 +37,15 @@
   ];
   const DEFAULT_MODEL = "deepseek/deepseek-chat-v3-0324:free";
   const MODEL_LIST_CAP = 250;
+
+  // Default "personality" so the assistant behaves like a friendly chat
+  // assistant (ChatGPT/Claude style) instead of dumping code walls.
+  const DEFAULT_SYSTEM =
+    "You are Pocket AI, a warm, thoughtful personal assistant. " +
+    "Reply conversationally and clearly in plain language, like a helpful chat assistant. " +
+    "Keep answers focused and easy to read — use short paragraphs or bullet points when they help. " +
+    "Do NOT write long blocks of code or technical implementation details unless the user explicitly asks for code. " +
+    "If a request is unclear, ask one brief clarifying question first. Be encouraging and down to earth.";
 
   /* ------------------------- Tiny helpers -------------------------------- */
   const $ = (id) => document.getElementById(id);
@@ -67,6 +77,7 @@
     fallbackModel: load(STORE.fallback, ""),
     favorites: load(STORE.favorites, []),
     autoRead: load(STORE.autoread, false),
+    systemPrompt: load(STORE.system, DEFAULT_SYSTEM),
   };
   let controller = null;       // AbortController for the in-flight request
   let streaming = false;
@@ -110,6 +121,8 @@
     keyStatus: $("keyStatus"),
     endpointInput: $("endpointInput"),
     fallbackInput: $("fallbackInput"),
+    systemInput: $("systemInput"),
+    systemReset: $("systemReset"),
     autoReadToggle: $("autoReadToggle"),
     refreshModels: $("refreshModels"),
     modelsInfo: $("modelsInfo"),
@@ -518,6 +531,8 @@
     setStreaming(true);
     controller = new AbortController();
     const payload = chat.messages.map((m) => ({ role: m.role, content: m.content }));
+    const sys = (state.systemPrompt || "").trim();
+    if (sys) payload.unshift({ role: "system", content: sys });
     const out = { text: "" };
     let usedFallback = false;
 
@@ -894,6 +909,7 @@
     dom.apiKeyInput.value = state.apiKey || "";
     dom.endpointInput.value = state.endpoint || DEFAULT_ENDPOINT;
     dom.fallbackInput.value = state.fallbackModel || "";
+    dom.systemInput.value = state.systemPrompt || "";
     dom.autoReadToggle.checked = !!state.autoRead;
     dom.keyStatus.textContent = "";
     dom.keyStatus.className = "field-status";
@@ -916,6 +932,9 @@
 
     state.fallbackModel = dom.fallbackInput.value.trim();
     save(STORE.fallback, state.fallbackModel);
+
+    state.systemPrompt = dom.systemInput.value;
+    save(STORE.system, state.systemPrompt);
 
     state.autoRead = dom.autoReadToggle.checked;
     save(STORE.autoread, state.autoRead);
@@ -1036,6 +1055,7 @@
       dom.apiKeyInput.type = isPw ? "text" : "password";
       dom.keyReveal.textContent = isPw ? "Hide" : "Show";
     });
+    dom.systemReset.addEventListener("click", () => { dom.systemInput.value = DEFAULT_SYSTEM; });
     dom.refreshModels.addEventListener("click", refreshModels);
     dom.clearAll.addEventListener("click", () => {
       if (confirm("Delete ALL conversations from this device? This cannot be undone.")) {
