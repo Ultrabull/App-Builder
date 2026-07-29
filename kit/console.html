@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>ReplyPlate — Console</title>
+<link rel="stylesheet" href="./console.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="dot"></span> ReplyPlate <span class="tagpill">Console</span></div>
+    <div class="client-pick">
+      <label for="clientSelect">Client:</label>
+      <select id="clientSelect"></select>
+    </div>
+    <button class="icon" id="settingsBtn" type="button" aria-label="Settings">⚙</button>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="clients">Clients</button>
+    <button class="tab" data-tab="replies">Reply to reviews</button>
+    <button class="tab" data-tab="getreviews">Get reviews</button>
+    <button class="tab" data-tab="social">Social posts</button>
+    <button class="tab" data-tab="outreach">Find clients</button>
+  </nav>
+
+  <main class="main">
+    <!-- CLIENTS -->
+    <section class="panel active" id="panel-clients">
+      <h2>Your restaurant clients</h2>
+      <p class="hint">Add each restaurant you work with. The active client (top-right) is used across all tools.</p>
+      <div class="clients-list" id="clientsList"></div>
+      <div class="card form">
+        <h3>Add / edit a client</h3>
+        <input id="cName" class="in" placeholder="Restaurant name *" />
+        <input id="cCuisine" class="in" placeholder="Cuisine / style (e.g. cozy Italian trattoria)" />
+        <input id="cTone" class="in" placeholder="Voice & tone (e.g. warm, playful, a little cheeky)" />
+        <input id="cReview" class="in" placeholder="Google review link (https://g.page/r/...)" />
+        <input id="cCity" class="in" placeholder="City / area (optional)" />
+        <div class="row">
+          <button class="btn" id="cSave" type="button">Save client</button>
+          <button class="btn ghost" id="cClear" type="button">Clear</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- REPLIES -->
+    <section class="panel" id="panel-replies">
+      <h2>Reply to a review</h2>
+      <p class="hint">Paste a customer review. You'll get 3 ready-to-post replies in the client's voice — safe and professional.</p>
+      <div class="row">
+        <label class="stars">Rating:
+          <select id="rvStars"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select>
+        </label>
+      </div>
+      <textarea id="rvText" class="ta" rows="4" placeholder="Paste the review here…"></textarea>
+      <button class="btn" id="rvGo" type="button">Generate 3 replies</button>
+      <div class="out" id="rvOut"></div>
+    </section>
+
+    <!-- GET REVIEWS -->
+    <section class="panel" id="panel-getreviews">
+      <h2>Get more 5-star reviews</h2>
+      <p class="hint">Friendly messages to send happy diners, with the client's review link built in.</p>
+      <button class="btn" id="grGo" type="button">Generate review requests</button>
+      <div class="out" id="grOut"></div>
+    </section>
+
+    <!-- SOCIAL -->
+    <section class="panel" id="panel-social">
+      <h2>Social posts</h2>
+      <p class="hint">What's the special, dish, or event? You'll get a batch of ready captions with hashtags.</p>
+      <input id="soTopic" class="in" placeholder="e.g. Friday: half-price wood-fired pizzas 5-7pm" />
+      <label class="stars">How many:
+        <select id="soCount"><option>3</option><option selected>5</option><option>8</option></select>
+      </label>
+      <button class="btn" id="soGo" type="button">Generate posts</button>
+      <div class="out" id="soOut"></div>
+    </section>
+
+    <!-- OUTREACH -->
+    <section class="panel" id="panel-outreach">
+      <h2>Find & pitch new clients</h2>
+      <p class="hint">Build your list from Google Maps (search "restaurants near me"), add them below, and generate a personal pitch for each. Track who you've contacted.</p>
+      <div class="card form">
+        <h3>Write a pitch</h3>
+        <input id="prName" class="in" placeholder="Restaurant name" />
+        <input id="prHook" class="in" placeholder="Something specific you noticed (e.g. 4.1★, replies to no reviews)" />
+        <div class="row">
+          <label class="stars">Channel:
+            <select id="prChannel"><option>Email</option><option>Instagram DM</option><option>Walk-in script</option></select>
+          </label>
+          <button class="btn" id="prGo" type="button">Write pitch</button>
+        </div>
+        <div class="out" id="prOut"></div>
+      </div>
+
+      <div class="card form">
+        <h3>Pipeline</h3>
+        <div class="row">
+          <input id="leadName" class="in" placeholder="Add a lead (restaurant name)" />
+          <button class="btn" id="leadAdd" type="button">Add</button>
+        </div>
+        <div class="leads" id="leadsList"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Settings modal -->
+  <div class="modal" id="settingsModal" hidden>
+    <div class="modal-card">
+      <div class="modal-head"><h2>Settings</h2><button class="icon" id="settingsClose" type="button">✕</button></div>
+      <div class="modal-body">
+        <label class="lbl" for="apiKey">OpenRouter API key</label>
+        <input id="apiKey" class="in" type="password" placeholder="sk-or-v1-…" />
+        <p class="hint">Stored only on this device. Get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>.</p>
+        <label class="lbl" for="modelSel" style="margin-top:14px">Model</label>
+        <select id="modelSel" class="in">
+          <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet (recommended)</option>
+          <option value="openai/gpt-4o-mini">GPT-4o mini (cheap)</option>
+          <option value="deepseek/deepseek-chat-v3-0324:free">DeepSeek V3 (free)</option>
+          <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B (free)</option>
+        </select>
+        <p class="hint">Claude writes the best replies. Free models work for testing.</p>
+      </div>
+      <div class="modal-foot"><button class="btn" id="settingsSave" type="button">Save</button></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="./console.js"></script>
+</body>
+</html>
