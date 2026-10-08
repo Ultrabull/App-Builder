@@ -24,6 +24,11 @@
     memory: "pocketai.memory",
     skills: "pocketai.skills",
     activeSkill: "pocketai.activeskill",
+    agentUrl: "pocketai.agenturl",
+    agentToken: "pocketai.agenttoken",
+    agentModel: "pocketai.agentmodel",
+    agentSteps: "pocketai.agentsteps",
+    agentSkills: "pocketai.agentskills",
   };
 
   // Built-in skills (specialized assistants). Custom ones are stored
@@ -97,6 +102,11 @@
     memory: load(STORE.memory, []),          // array of fact strings
     customSkills: load(STORE.skills, []),    // user-created skills
     activeSkillId: load(STORE.activeSkill, "general"),
+    agentUrl: load(STORE.agentUrl, ""),
+    agentToken: load(STORE.agentToken, ""),
+    agentModel: load(STORE.agentModel, "google/gemini-2.0-flash-001"),
+    agentSteps: load(STORE.agentSteps, 25),
+    agentSkills: load(STORE.agentSkills, []), // saved one-tap agent tasks
   };
   let controller = null;       // AbortController for the in-flight request
   let streaming = false;
@@ -166,6 +176,37 @@
     modelsInfo: $("modelsInfo"),
     clearAll: $("clearAll"),
     toast: $("toast"),
+    // agent settings
+    agentUrlInput: $("agentUrlInput"),
+    agentTokenInput: $("agentTokenInput"),
+    agentTokenReveal: $("agentTokenReveal"),
+    agentModelInput: $("agentModelInput"),
+    agentStepsInput: $("agentStepsInput"),
+    // agent panel
+    agentBtn: $("agentBtn"),
+    agentModal: $("agentModal"),
+    agentClose: $("agentClose"),
+    agentSetup: $("agentSetup"),
+    agentMain: $("agentMain"),
+    agentGoSettings: $("agentGoSettings"),
+    agentTask: $("agentTask"),
+    agentStartUrl: $("agentStartUrl"),
+    agentRun: $("agentRun"),
+    agentStop: $("agentStop"),
+    agentStatus: $("agentStatus"),
+    agentSkillsWrap: $("agentSkillsWrap"),
+    agentSkillChips: $("agentSkillChips"),
+    agentStage: $("agentStage"),
+    agentScreen: $("agentScreen"),
+    agentStepBadge: $("agentStepBadge"),
+    agentLog: $("agentLog"),
+    agentConfirm: $("agentConfirm"),
+    agentConfirmText: $("agentConfirmText"),
+    agentApprove: $("agentApprove"),
+    agentDeny: $("agentDeny"),
+    agentSaveWrap: $("agentSaveWrap"),
+    agentSaveName: $("agentSaveName"),
+    agentSaveSkill: $("agentSaveSkill"),
   };
 
   /* ---------------------- Endpoint / URL helpers ------------------------- */
@@ -1139,6 +1180,236 @@
     return parts.join("\n\n");
   }
 
+  /* ============================= Agent ================================= */
+  // Natural-language browser automation, driven by a self-hosted agent
+  // server (see the agent-server/ folder). The app is the remote control:
+  // it POSTs a task, then streams steps + screenshots over SSE.
+  let agentES = null;        // active EventSource
+  let agentTaskId = null;
+  let agentConfirmCid = null;
+
+  const agentConfigured = () => !!(state.agentUrl && state.agentToken);
+  const agentBase = () => (state.agentUrl || "").trim().replace(/\/+$/, "");
+  const shortHost = (u) => { try { return new URL(u).host.replace(/^www\./, ""); } catch { return ""; } };
+
+  function openAgent() {
+    const ok = agentConfigured();
+    dom.agentSetup.hidden = ok;
+    dom.agentMain.hidden = !ok;
+    renderAgentSkills();
+    dom.agentModal.hidden = false;
+    if (ok) setTimeout(() => dom.agentTask.focus(), 30);
+  }
+  function closeAgent() { dom.agentModal.hidden = true; }
+
+  function agentLogLine(html, cls) {
+    const line = el("div", cls || "");
+    line.innerHTML = html;
+    dom.agentLog.appendChild(line);
+    dom.agentLog.scrollTop = dom.agentLog.scrollHeight;
+  }
+
+  function setAgentRunning(on) {
+    dom.agentRun.hidden = on;
+    dom.agentStop.hidden = !on;
+    dom.agentTask.disabled = on;
+  }
+
+  function stopAgent(quiet) {
+    if (agentES) { try { agentES.close(); } catch {} agentES = null; }
+    setAgentRunning(false);
+    dom.agentConfirm.hidden = true;
+    if (!quiet) dom.agentStatus.textContent = "Stopped.";
+  }
+
+  function describeAgentAction(a) {
+    switch (a.type) {
+      case "navigate": return "go to " + (a.url || "");
+      case "click": return "click #" + a.index;
+      case "type": return `type “${a.text || ""}”` + (a.submit ? " + Enter" : "");
+      case "scroll": return "scroll " + (a.direction || "down");
+      case "wait": return "wait";
+      case "done": return "finish";
+      case "ask": return "ask you";
+      default: return a.type || "";
+    }
+  }
+
+  async function runAgent(task, startUrl) {
+    task = (task || "").trim();
+    if (!task) { showToast("Type a task first"); return; }
+    if (!agentConfigured()) { showToast("Set up the agent in Settings"); closeAgent(); openSettings(); return; }
+    if (!state.apiKey) { showToast("Add your OpenRouter key in Settings"); closeAgent(); openSettings(); return; }
+
+    stopAgent(true);
+    dom.agentLog.innerHTML = "";
+    dom.agentStage.hidden = false;
+    dom.agentSaveWrap.hidden = true;
+    dom.agentStatus.textContent = "Starting…";
+    dom.agentStepBadge.textContent = "";
+    dom.agentScreen.removeAttribute("src");
+    setAgentRunning(true);
+    dom.agentTask.value = task;
+
+    const sUrl = (startUrl != null ? startUrl : dom.agentStartUrl.value || "").trim();
+    let res;
+    try {
+      res = await fetch(agentBase() + "/task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + state.agentToken },
+        body: JSON.stringify({
+          task,
+          apiKey: state.apiKey,
+          model: state.agentModel || "google/gemini-2.0-flash-001",
+          endpoint: normEndpoint(state.endpoint),
+          startUrl: sUrl || undefined,
+          maxSteps: Number(state.agentSteps) || 25,
+        }),
+      });
+    } catch (e) {
+      dom.agentStatus.textContent = "Couldn't reach the agent server.";
+      agentLogLine("Connection failed: " + escapeHtml(e.message), "step-err");
+      setAgentRunning(false);
+      return;
+    }
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      dom.agentStatus.textContent = "Server error " + res.status;
+      agentLogLine("Server said: " + escapeHtml(t || String(res.status)), "step-err");
+      setAgentRunning(false);
+      return;
+    }
+    let id;
+    try { ({ id } = await res.json()); } catch { id = null; }
+    if (!id) { dom.agentStatus.textContent = "Bad response from server."; setAgentRunning(false); return; }
+    agentTaskId = id;
+    dom.agentStatus.textContent = "Working…";
+
+    // EventSource can't set headers → pass the token as a query param
+    // (the server also accepts ?token=).
+    const url = agentBase() + "/stream/" + id + "?token=" + encodeURIComponent(state.agentToken);
+    const es = new EventSource(url);
+    agentES = es;
+    es.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+      handleAgentEvent(msg);
+      // On a terminal event, close the stream so EventSource doesn't
+      // auto-reconnect and replay the whole buffer in a loop.
+      if (msg.type === "done" || msg.type === "stopped" || msg.type === "error") {
+        if (agentES === es) { try { es.close(); } catch {} agentES = null; }
+        setAgentRunning(false);
+      }
+    };
+    es.onerror = () => {
+      // Close to avoid a reconnect/replay loop; the user can re-run.
+      if (agentES === es) { try { es.close(); } catch {} agentES = null; }
+      setAgentRunning(false);
+      const s = dom.agentStatus.textContent || "";
+      if (/Working|Starting/.test(s)) dom.agentStatus.textContent = "Disconnected — tap Run to retry.";
+    };
+  }
+
+  function handleAgentEvent(msg) {
+    switch (msg.type) {
+      case "screenshot":
+        if (msg.image) dom.agentScreen.src = "data:image/jpeg;base64," + msg.image;
+        dom.agentStepBadge.textContent =
+          "Step " + msg.step + (msg.url ? " · " + shortHost(msg.url) : "");
+        break;
+      case "thought": {
+        const a = msg.action || {};
+        const desc = a.type ? describeAgentAction(a) : "";
+        agentLogLine(
+          `<span class="step-n">${msg.step}.</span> ${escapeHtml(msg.thought || "")}` +
+          (desc ? ` <span style="opacity:.75">→ ${escapeHtml(desc)}</span>` : "")
+        );
+        break;
+      }
+      case "confirm-needed":
+        // Informational; the actual prompt arrives as confirm-request.
+        break;
+      case "confirm-request": {
+        agentConfirmCid = msg.cid;
+        const a = msg.action || {};
+        dom.agentConfirmText.textContent =
+          "Approve this action — " + describeAgentAction(a) +
+          (a.reason ? " (" + a.reason + ")" : "") + "?";
+        dom.agentConfirm.hidden = false;
+        break;
+      }
+      case "ask":
+        dom.agentStatus.textContent = "Needs you";
+        agentLogLine("❓ " + escapeHtml(msg.question || "The agent needs input."), "step-err");
+        dom.agentSaveWrap.hidden = false;
+        break;
+      case "done":
+        dom.agentStatus.textContent = "✅ Done";
+        agentLogLine("✓ " + escapeHtml(msg.summary || "Task complete."), "step-done");
+        dom.agentSaveWrap.hidden = false;
+        break;
+      case "stopped":
+        dom.agentStatus.textContent = "Stopped";
+        agentLogLine("Stopped: " + escapeHtml(msg.reason || ""), "step-err");
+        dom.agentSaveWrap.hidden = false;
+        break;
+      case "action-error":
+        agentLogLine("⚠️ " + escapeHtml(msg.message || "action error"), "step-err");
+        break;
+      case "error":
+        dom.agentStatus.textContent = "Error";
+        agentLogLine("⚠️ " + escapeHtml(msg.message || "error"), "step-err");
+        break;
+    }
+  }
+
+  async function answerConfirm(approve) {
+    dom.agentConfirm.hidden = true;
+    if (!agentTaskId || !agentConfirmCid) return;
+    const cid = agentConfirmCid;
+    agentConfirmCid = null;
+    try {
+      await fetch(agentBase() + "/confirm/" + agentTaskId, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + state.agentToken },
+        body: JSON.stringify({ cid, approve }),
+      });
+    } catch {}
+  }
+
+  // Saved one-tap tasks (your "skills" edge over general agents).
+  function renderAgentSkills() {
+    const list = state.agentSkills || [];
+    dom.agentSkillsWrap.hidden = list.length === 0;
+    dom.agentSkillChips.innerHTML = "";
+    list.forEach((sk, i) => {
+      const chip = el("button", "agent-skill-chip");
+      chip.type = "button";
+      chip.innerHTML = escapeHtml(sk.name) + ' <span class="x" aria-label="delete">✕</span>';
+      chip.addEventListener("click", (e) => {
+        if (e.target.classList.contains("x")) { e.stopPropagation(); removeAgentSkill(i); return; }
+        runAgent(sk.task, sk.startUrl || "");
+      });
+      dom.agentSkillChips.appendChild(chip);
+    });
+  }
+  function saveAgentSkill() {
+    const name = dom.agentSaveName.value.trim();
+    const task = dom.agentTask.value.trim();
+    if (!name || !task) { showToast("Add a name for this task"); return; }
+    state.agentSkills = state.agentSkills || [];
+    state.agentSkills.push({ name, task, startUrl: dom.agentStartUrl.value.trim() });
+    save(STORE.agentSkills, state.agentSkills);
+    dom.agentSaveName.value = "";
+    dom.agentSaveWrap.hidden = true;
+    renderAgentSkills();
+    showToast("Saved task: " + name);
+  }
+  function removeAgentSkill(i) {
+    state.agentSkills.splice(i, 1);
+    save(STORE.agentSkills, state.agentSkills);
+    renderAgentSkills();
+  }
+
   /* ============================ Settings ================================ */
   function openSettings() {
     renderMemory();
@@ -1147,6 +1418,10 @@
     dom.fallbackInput.value = state.fallbackModel || "";
     dom.systemInput.value = state.systemPrompt || "";
     dom.autoReadToggle.checked = !!state.autoRead;
+    dom.agentUrlInput.value = state.agentUrl || "";
+    dom.agentTokenInput.value = state.agentToken || "";
+    dom.agentModelInput.value = state.agentModel || "";
+    dom.agentStepsInput.value = state.agentSteps || 25;
     dom.keyStatus.textContent = "";
     dom.keyStatus.className = "field-status";
     dom.settingsModal.hidden = false;
@@ -1174,6 +1449,15 @@
 
     state.autoRead = dom.autoReadToggle.checked;
     save(STORE.autoread, state.autoRead);
+
+    state.agentUrl = (dom.agentUrlInput.value || "").trim();
+    save(STORE.agentUrl, state.agentUrl);
+    state.agentToken = (dom.agentTokenInput.value || "").trim();
+    save(STORE.agentToken, state.agentToken);
+    state.agentModel = (dom.agentModelInput.value || "").trim() || "google/gemini-2.0-flash-001";
+    save(STORE.agentModel, state.agentModel);
+    state.agentSteps = Math.max(3, Math.min(60, Number(dom.agentStepsInput.value) || 25));
+    save(STORE.agentSteps, state.agentSteps);
 
     updateModelButton();
     closeSettings();
@@ -1322,6 +1606,24 @@
       }
     });
 
+    // Agent token show/hide
+    dom.agentTokenReveal.addEventListener("click", () => {
+      const isPw = dom.agentTokenInput.type === "password";
+      dom.agentTokenInput.type = isPw ? "text" : "password";
+      dom.agentTokenReveal.textContent = isPw ? "Hide" : "Show";
+    });
+
+    // Agent panel
+    dom.agentBtn.addEventListener("click", openAgent);
+    dom.agentClose.addEventListener("click", closeAgent);
+    dom.agentModal.addEventListener("click", (e) => { if (e.target === dom.agentModal) closeAgent(); });
+    dom.agentGoSettings.addEventListener("click", () => { closeAgent(); openSettings(); });
+    dom.agentRun.addEventListener("click", () => runAgent(dom.agentTask.value, dom.agentStartUrl.value));
+    dom.agentStop.addEventListener("click", () => stopAgent(false));
+    dom.agentApprove.addEventListener("click", () => answerConfirm(true));
+    dom.agentDeny.addEventListener("click", () => answerConfirm(false));
+    dom.agentSaveSkill.addEventListener("click", saveAgentSkill);
+
     // Copy handler for code blocks (delegated)
     dom.messages.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-copy]");
@@ -1336,6 +1638,7 @@
       else if (!dom.settingsModal.hidden) closeSettings();
       else if (!dom.modelModal.hidden) closeModelModal();
       else if (!dom.skillsModal.hidden) closeSkillsModal();
+      else if (!dom.agentModal.hidden) closeAgent();
       else closeSidebar();
     });
 
