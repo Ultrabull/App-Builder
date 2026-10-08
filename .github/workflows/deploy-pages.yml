@@ -46,7 +46,7 @@ jobs:
           for item in * .[!.]*; do
             [ -e "$item" ] || continue
             case "$item" in
-              .git|.github|_site) continue ;;
+              .git|.github|_site|agent-server) continue ;;
             esac
             cp -R "$item" _site/
           done
