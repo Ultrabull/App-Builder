@@ -55,7 +55,7 @@
       </div>
 
       <div class="topbar-actions">
-        <button class="icon-btn" id="agentBtn" type="button" aria-label="Open the browser agent" title="Agent">
+        <button class="icon-btn" id="agentBtn" type="button" aria-label="Open Scout" title="Scout">
           <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path fill="currentColor" d="M12 2a1 1 0 0 1 1 1v1h3a3 3 0 0 1 3 3v2h1a1 1 0 1 1 0 2h-1v4a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-4H4a1 1 0 1 1 0-2h1V7a3 3 0 0 1 3-3h3V3a1 1 0 0 1 1-1zM9 12a1.25 1.25 0 1 0 0 2.5A1.25 1.25 0 0 0 9 12zm6 0a1.25 1.25 0 1 0 0 2.5A1.25 1.25 0 0 0 15 12z"/></svg>
         </button>
         <button class="icon-btn free-btn" id="freeBtn" type="button" aria-label="Pick a free model" title="Free models">
@@ -157,15 +157,15 @@
   <div class="modal" id="agentModal" hidden>
     <div class="modal-card agent-card" role="dialog" aria-modal="true" aria-labelledby="agentTitle">
       <div class="modal-head">
-        <h2 id="agentTitle">🤖 Agent</h2>
-        <button class="icon-btn" id="agentClose" type="button" aria-label="Close agent">
+        <h2 id="agentTitle">🤖 Scout</h2>
+        <button class="icon-btn" id="agentClose" type="button" aria-label="Close Scout">
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z"/></svg>
         </button>
       </div>
       <div class="modal-body agent-body">
         <!-- Shown until the backend is configured in Settings -->
         <div class="agent-setup" id="agentSetup" hidden>
-          <p>Connect your agent server to let Pocket AI drive a real browser for you.</p>
+          <p>Connect Scout to let Pocket AI drive a real browser for you.</p>
           <button class="primary-btn wide" id="agentGoSettings" type="button">Set up in Settings</button>
           <p class="field-help">You deploy the server from the <b>agent-server</b> folder (see its README), then paste its URL and token in Settings → Agent.</p>
         </div>
@@ -190,7 +190,7 @@
           <!-- Live view -->
           <div class="agent-stage" id="agentStage" hidden>
             <div class="agent-screen-wrap">
-              <img id="agentScreen" class="agent-screen" alt="agent browser view" />
+              <img id="agentScreen" class="agent-screen" alt="Scout browser view" />
               <span class="agent-step-badge" id="agentStepBadge"></span>
             </div>
             <div class="agent-log" id="agentLog" aria-live="polite"></div>
@@ -270,19 +270,19 @@
 
         <hr class="divider" />
 
-        <label class="field-label">🤖 Agent (browser automation)</label>
-        <p class="field-help" style="margin-top:0;">Lets the 🤖 button drive a real browser for you. Requires your own agent server (see the <b>agent-server</b> folder's README).</p>
+        <label class="field-label">🤖 Scout (browser automation)</label>
+        <p class="field-help" style="margin-top:0;">Lets Scout (the 🤖 button) drive a real browser for you. Requires your own Scout server (see the <b>agent-server</b> folder's README).</p>
 
-        <label class="field-label" for="agentUrlInput" style="margin-top:12px;">Agent server URL</label>
+        <label class="field-label" for="agentUrlInput" style="margin-top:12px;">Scout server URL</label>
         <input id="agentUrlInput" class="text-input" type="text" placeholder="https://your-app.up.railway.app" autocomplete="off" spellcheck="false" />
 
-        <label class="field-label" for="agentTokenInput" style="margin-top:12px;">Agent token</label>
+        <label class="field-label" for="agentTokenInput" style="margin-top:12px;">Scout token</label>
         <div class="key-row">
           <input id="agentTokenInput" class="text-input" type="password" placeholder="the AGENT_TOKEN you set on the server" autocomplete="off" spellcheck="false" />
           <button class="ghost-btn" id="agentTokenReveal" type="button" aria-label="Show or hide token">Show</button>
         </div>
 
-        <label class="field-label" for="agentModelInput" style="margin-top:12px;">Agent model <span style="font-weight:400;color:var(--text-dim)">(must support vision)</span></label>
+        <label class="field-label" for="agentModelInput" style="margin-top:12px;">Scout model <span style="font-weight:400;color:var(--text-dim)">(must support vision)</span></label>
         <input id="agentModelInput" class="text-input" type="text" placeholder="google/gemini-2.0-flash-001" autocomplete="off" spellcheck="false" />
         <p class="field-help">A budget vision model keeps each task cheap (often ~1–3¢). Pricier models click more reliably.</p>
 

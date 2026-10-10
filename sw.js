@@ -1,6 +1,6 @@
 /* Pocket AI service worker — offline app shell.
    Bump CACHE when the shell changes so clients pick up new files. */
-const CACHE = "pocketai-v9";
+const CACHE = "pocketai-v10";
 const SHELL = [
   "./",
   "./index.html",

@@ -1238,7 +1238,7 @@
   async function runAgent(task, startUrl) {
     task = (task || "").trim();
     if (!task) { showToast("Type a task first"); return; }
-    if (!agentConfigured()) { showToast("Set up the agent in Settings"); closeAgent(); openSettings(); return; }
+    if (!agentConfigured()) { showToast("Set up Scout in Settings"); closeAgent(); openSettings(); return; }
     if (!state.apiKey) { showToast("Add your OpenRouter key in Settings"); closeAgent(); openSettings(); return; }
 
     stopAgent(true);
