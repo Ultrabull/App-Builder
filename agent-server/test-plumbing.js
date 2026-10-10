@@ -51,7 +51,9 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✅', m); } else { fail++
   const outText = await page.locator('#out').textContent();
   ok(outText === 'RESULT:hello world', `action executed in page DOM: "${outText}"`);
   ok(events.some((e) => e.type === 'screenshot' && e.image), 'screenshots were emitted (base64)');
-  ok(events.some((e) => e.type === 'done'), 'done event emitted');
+  const doneEv = events.find((e) => e.type === 'done');
+  ok(doneEv, 'done event emitted');
+  ok(doneEv && Array.isArray(doneEv.trace) && doneEv.trace.length >= 2, `done carries the successful step trace (${doneEv && doneEv.trace ? doneEv.trace.length : 0} steps) — for self-improving skills`);
 
   // 3. Sensitivity gate: clicking "Delete account" must request confirmation.
   const els2 = await extractElements(page);

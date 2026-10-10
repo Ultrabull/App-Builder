@@ -23,14 +23,20 @@ Rules:
 - If a login/CAPTCHA/payment is required and you lack what's needed, use "ask".
 - When the goal is achieved, use "done" with a brief result summary.`;
 
-function buildUserContent({ task, url, elements, history, screenshot }) {
+function buildUserContent({ task, url, elements, history, screenshot, hint }) {
   const list = elements
     .slice(0, 80)
     .map((e) => `#${e.index} <${e.tag}${e.type ? ' ' + e.type : ''}> ${e.text || ''}`.trim())
     .join('\n');
   const hist = history.length ? history.slice(-12).map((h, i) => `${i + 1}. ${h}`).join('\n') : '(nothing yet)';
+  // A learned "skill": the steps that worked last time for a similar task.
+  // Following it cuts exploration (cheaper, faster, more reliable).
+  const plan = Array.isArray(hint) && hint.length
+    ? `PROVEN PLAN from a previous successful run of a similar task — follow these steps in order, adapting only if the page looks different or a step is clearly unnecessary:\n` +
+      hint.map((h, i) => `${i + 1}. ${h}`).join('\n') + `\n\n`
+    : '';
   const text =
-    `TASK: ${task}\n\nURL: ${url}\n\nHISTORY:\n${hist}\n\nELEMENTS:\n${list || '(none found)'}\n\n` +
+    `TASK: ${task}\n\n${plan}URL: ${url}\n\nHISTORY:\n${hist}\n\nELEMENTS:\n${list || '(none found)'}\n\n` +
     `Decide the single next action as one JSON object.`;
 
   const content = [{ type: 'text', text }];

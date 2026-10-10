@@ -55,7 +55,7 @@ the roadmap; until then logins happen during a task via the `ask` pause.)
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/task` | single Scout task: `{task, apiKey, model, endpoint?, startUrl?}` → `{id}` |
+| POST | `/task` | single Scout task: `{task, apiKey, model, endpoint?, startUrl?, hint?, maxSteps?}` → `{id}`. `hint` is a learned step trace ("proven plan") that makes repeat tasks cheaper and more reliable; the `done` event returns the run's `trace` so the client can save/refine it as a skill. |
 | POST | `/run` | multi-agent team: `{goal, apiKey, orchModel, workerModel?, scoutModel?, endpoint?, maxRounds?, maxParallel?}` → `{id}` |
 | GET  | `/stream/:id` | Server-Sent Events: `screenshot`, `thought`, `plan`, `round-start`, `agent-start`, `agent-msg`, `confirm-request`, `done`/`final`, … |
 | POST | `/confirm/:id` | `{cid, approve}` to answer a confirmation |

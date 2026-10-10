@@ -115,7 +115,7 @@ async function execute(page, action, elements) {
  * @param {string[]} [o.allowlist]   allowed hosts; [] means any
  * @param {number} [o.maxSteps]
  */
-async function runTask({ task, page, decide, emit, confirm, allowlist = [], maxSteps = 25 }) {
+async function runTask({ task, page, decide, emit, confirm, allowlist = [], maxSteps = 25, hint = null }) {
   const history = [];
   for (let step = 1; step <= maxSteps; step++) {
     const url = page.url();
@@ -127,7 +127,7 @@ async function runTask({ task, page, decide, emit, confirm, allowlist = [], maxS
 
     let action;
     try {
-      action = await decide({ task, url, elements, history, screenshot: shot });
+      action = await decide({ task, url, elements, history, screenshot: shot, hint });
     } catch (e) {
       emit({ type: 'error', step, message: 'model error: ' + e.message });
       return { ok: false, reason: 'model-error' };
@@ -135,8 +135,10 @@ async function runTask({ task, page, decide, emit, confirm, allowlist = [], maxS
     emit({ type: 'thought', step, thought: action.thought || '', action });
 
     if (action.type === 'done') {
-      emit({ type: 'done', summary: action.summary || 'Task complete.' });
-      return { ok: true };
+      // Emit the successful step trace so the client can save/refine it as a
+      // reusable skill (Hermes-style self-improvement).
+      emit({ type: 'done', summary: action.summary || 'Task complete.', trace: history.slice() });
+      return { ok: true, trace: history.slice() };
     }
     if (action.type === 'ask') {
       emit({ type: 'ask', question: action.question || 'I need input to continue.' });

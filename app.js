@@ -1187,6 +1187,8 @@
   let agentES = null;        // active EventSource
   let agentTaskId = null;
   let agentConfirmCid = null;
+  let agentRun = { skillId: null, taskText: "" }; // the run in flight
+  let lastTrace = [];        // successful step trace from the last finished run
 
   const agentConfigured = () => !!(state.agentUrl && state.agentToken);
   const agentBase = () => (state.agentUrl || "").trim().replace(/\/+$/, "");
@@ -1235,7 +1237,8 @@
     }
   }
 
-  async function runAgent(task, startUrl) {
+  async function runAgent(task, startUrl, opts) {
+    opts = opts || {};
     task = (task || "").trim();
     if (!task) { showToast("Type a task first"); return; }
     if (!agentConfigured()) { showToast("Set up Scout in Settings"); closeAgent(); openSettings(); return; }
@@ -1250,6 +1253,20 @@
     dom.agentScreen.removeAttribute("src");
     setAgentRunning(true);
     dom.agentTask.value = task;
+    lastTrace = [];
+
+    // Self-improving skills: reuse a learned "proven plan" when this task
+    // matches one Scout has done before.
+    let skillId = opts.skillId || null;
+    let hint = null;
+    if (skillId) {
+      const sk = (state.agentSkills || []).find((s) => s.id === skillId);
+      if (sk && Array.isArray(sk.trace) && sk.trace.length) hint = sk.trace;
+    } else {
+      const m = matchSkill(task);
+      if (m) { skillId = m.id; hint = m.trace; showToast("✨ Using learned skill: " + m.name); agentLogLine(`<span class="step-done">✨ reusing learned skill: ${escapeHtml(m.name)} (${m.successes || 0} prior run${(m.successes||0) === 1 ? "" : "s"})</span>`); }
+    }
+    agentRun = { skillId, taskText: task };
 
     const sUrl = (startUrl != null ? startUrl : dom.agentStartUrl.value || "").trim();
     let res;
@@ -1264,6 +1281,7 @@
           endpoint: normEndpoint(state.endpoint),
           startUrl: sUrl || undefined,
           maxSteps: Number(state.agentSteps) || 25,
+          hint: hint && hint.length ? hint : undefined,
         }),
       });
     } catch (e) {
@@ -1345,7 +1363,12 @@
       case "done":
         dom.agentStatus.textContent = "✅ Done";
         agentLogLine("✓ " + escapeHtml(msg.summary || "Task complete."), "step-done");
-        dom.agentSaveWrap.hidden = false;
+        if (Array.isArray(msg.trace)) lastTrace = msg.trace;
+        if (agentRun.skillId) {
+          refineSkill(agentRun.skillId, lastTrace); // self-improve the learned skill
+        } else {
+          dom.agentSaveWrap.hidden = false;          // offer to save this as a new skill
+        }
         break;
       case "stopped":
         dom.agentStatus.textContent = "Stopped";
@@ -1379,35 +1402,83 @@
   // Saved one-tap tasks (your "skills" edge over general agents).
   function renderAgentSkills() {
     const list = state.agentSkills || [];
+    // Migrate older skills that predate ids.
+    let changed = false;
+    list.forEach((sk) => { if (!sk.id) { sk.id = "as-" + uid(); changed = true; } });
+    if (changed) save(STORE.agentSkills, list);
+
     dom.agentSkillsWrap.hidden = list.length === 0;
     dom.agentSkillChips.innerHTML = "";
     list.forEach((sk, i) => {
       const chip = el("button", "agent-skill-chip");
       chip.type = "button";
-      chip.innerHTML = escapeHtml(sk.name) + ' <span class="x" aria-label="delete">✕</span>';
+      const learned = (sk.successes || 0) > 0 && Array.isArray(sk.trace) && sk.trace.length;
+      chip.innerHTML =
+        escapeHtml(sk.name) +
+        (learned ? ` <span class="skill-badge" title="Learned from ${sk.successes} run${sk.successes === 1 ? "" : "s"}">✨${sk.successes}</span>` : "") +
+        ' <span class="x" aria-label="delete">✕</span>';
+      chip.title = learned ? "Learned recipe — runs cheaper & more reliably" : "Run this task";
       chip.addEventListener("click", (e) => {
         if (e.target.classList.contains("x")) { e.stopPropagation(); removeAgentSkill(i); return; }
-        runAgent(sk.task, sk.startUrl || "");
+        runAgent(sk.task, sk.startUrl || "", { skillId: sk.id });
       });
       dom.agentSkillChips.appendChild(chip);
     });
   }
+
   function saveAgentSkill() {
     const name = dom.agentSaveName.value.trim();
     const task = dom.agentTask.value.trim();
     if (!name || !task) { showToast("Add a name for this task"); return; }
     state.agentSkills = state.agentSkills || [];
-    state.agentSkills.push({ name, task, startUrl: dom.agentStartUrl.value.trim() });
+    const hasTrace = Array.isArray(lastTrace) && lastTrace.length;
+    state.agentSkills.push({
+      id: "as-" + uid(), name, task, startUrl: dom.agentStartUrl.value.trim(),
+      trace: hasTrace ? lastTrace.slice() : [],
+      runs: hasTrace ? 1 : 0, successes: hasTrace ? 1 : 0, updated: Date.now(),
+    });
     save(STORE.agentSkills, state.agentSkills);
     dom.agentSaveName.value = "";
     dom.agentSaveWrap.hidden = true;
     renderAgentSkills();
-    showToast("Saved task: " + name);
+    showToast(hasTrace ? `✨ Learned skill: ${name}` : `Saved task: ${name}`);
   }
+
   function removeAgentSkill(i) {
     state.agentSkills.splice(i, 1);
     save(STORE.agentSkills, state.agentSkills);
     renderAgentSkills();
+  }
+
+  // Update a skill with a fresh successful trace (self-improvement).
+  function refineSkill(id, trace) {
+    const sk = (state.agentSkills || []).find((s) => s.id === id);
+    if (!sk) return;
+    sk.runs = (sk.runs || 0) + 1;
+    sk.successes = (sk.successes || 0) + 1;
+    if (Array.isArray(trace) && trace.length) sk.trace = trace.slice(); // keep the latest proven plan
+    sk.updated = Date.now();
+    save(STORE.agentSkills, state.agentSkills);
+    renderAgentSkills();
+    showToast(`✨ Scout refined “${sk.name}” (${sk.successes} runs)`);
+  }
+
+  // Find a learned skill whose task closely matches a freely-typed one,
+  // so Scout can reuse its proven plan without the user picking a chip.
+  function matchSkill(task) {
+    const toks = (s) => new Set((s || "").toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+    const a = toks(task);
+    if (!a.size) return null;
+    let best = null, bestScore = 0;
+    for (const sk of state.agentSkills || []) {
+      if (!Array.isArray(sk.trace) || !sk.trace.length) continue;
+      const b = toks(sk.task);
+      if (!b.size) continue;
+      let inter = 0; a.forEach((t) => { if (b.has(t)) inter++; });
+      const score = inter / (a.size + b.size - inter); // Jaccard
+      if (score > bestScore) { bestScore = score; best = sk; }
+    }
+    return bestScore >= 0.6 ? best : null;
   }
 
   /* ============================ Settings ================================ */

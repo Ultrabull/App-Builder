@@ -70,7 +70,7 @@ app.get('/health', (_req, res) => res.json({ ok: true, allowlist: ALLOWLIST }));
 // Start a task.
 app.post('/task', async (req, res) => {
   if (!authed(req)) return res.status(401).json({ error: 'unauthorized' });
-  const { task, apiKey, model, endpoint, startUrl } = req.body || {};
+  const { task, apiKey, model, endpoint, startUrl, hint, maxSteps } = req.body || {};
   if (!task || !apiKey || !model) {
     return res.status(400).json({ error: 'task, apiKey and model are required' });
   }
@@ -95,7 +95,11 @@ app.post('/task', async (req, res) => {
       let u = /^https?:\/\//i.test(startUrl) ? startUrl : 'https://' + startUrl;
       await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     }
-    await runTask({ task, page, decide, emit, confirm, allowlist: ALLOWLIST });
+    await runTask({
+      task, page, decide, emit, confirm, allowlist: ALLOWLIST,
+      hint: Array.isArray(hint) ? hint : null,
+      maxSteps: Number(maxSteps) || 25,
+    });
   } catch (e) {
     emit({ type: 'error', message: e.message });
   }
