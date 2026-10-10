@@ -55,10 +55,25 @@ the roadmap; until then logins happen during a task via the `ask` pause.)
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/task` | `{task, apiKey, model, endpoint?, startUrl?}` → `{id}` |
-| GET  | `/stream/:id` | Server-Sent Events: `screenshot`, `thought`, `confirm-request`, `done`, … |
+| POST | `/task` | single Scout task: `{task, apiKey, model, endpoint?, startUrl?}` → `{id}` |
+| POST | `/run` | multi-agent team: `{goal, apiKey, orchModel, workerModel?, scoutModel?, endpoint?, maxRounds?, maxParallel?}` → `{id}` |
+| GET  | `/stream/:id` | Server-Sent Events: `screenshot`, `thought`, `plan`, `round-start`, `agent-start`, `agent-msg`, `confirm-request`, `done`/`final`, … |
 | POST | `/confirm/:id` | `{cid, approve}` to answer a confirmation |
 | GET  | `/health` | liveness |
+
+### Multi-agent "team" (`/run`)
+
+An **orchestrator** model breaks a goal into subtasks and delegates them to worker
+agents — **in parallel** when they're independent — then combines the results:
+
+- **scout** — the browser agent (the only one with live web access); each subtask gets its own tab.
+- **researcher** — summarizes/reasons over information.
+- **writer** — produces the final output.
+- **analyst** — calculation/data reasoning.
+
+Cost guards: `maxRounds` caps orchestrator turns, `maxParallel` caps agents per round,
+and `maxSteps` caps each Scout subtask. Use a cheap `workerModel` and a stronger
+`orchModel`. The stream is unified so the UI can show the agents talking.
 
 ## Local test (no key needed)
 

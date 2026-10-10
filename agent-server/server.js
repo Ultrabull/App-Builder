@@ -7,6 +7,11 @@ const express = require('express');
 const { chromium } = require('playwright');
 const { runTask } = require('./agent');
 const { makeDecider } = require('./model');
+const { runTeam } = require('./orchestrator');
+const {
+  makePlanner, makeTextWorker, makeScoutWorker,
+  RESEARCHER_SYS, WRITER_SYS, ANALYST_SYS, DEFAULT_ROSTER,
+} = require('./team');
 
 const PORT = process.env.PORT || 8080;
 const AUTH = process.env.AGENT_TOKEN || '';            // shared secret; required in prod
@@ -56,7 +61,7 @@ function emitter(id) {
     const line = `data: ${JSON.stringify(msg)}\n\n`;
     t.buffer.push(line);
     for (const res of t.listeners) res.write(line);
-    if (msg.type === 'done' || msg.type === 'stopped' || msg.type === 'error') t.finished = true;
+    if (['done', 'final', 'stopped', 'error'].includes(msg.type)) t.finished = true;
   };
 }
 
@@ -91,6 +96,52 @@ app.post('/task', async (req, res) => {
       await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     }
     await runTask({ task, page, decide, emit, confirm, allowlist: ALLOWLIST });
+  } catch (e) {
+    emit({ type: 'error', message: e.message });
+  }
+});
+
+// Start a multi-agent team run (orchestrator + workers, parallel).
+app.post('/run', async (req, res) => {
+  if (!authed(req)) return res.status(401).json({ error: 'unauthorized' });
+  const { goal, apiKey, endpoint, orchModel, workerModel, scoutModel, maxRounds, maxParallel, maxSteps } = req.body || {};
+  if (!goal || !apiKey || !orchModel) {
+    return res.status(400).json({ error: 'goal, apiKey and orchModel are required' });
+  }
+  const id = Math.random().toString(36).slice(2, 10);
+  tasks.set(id, { listeners: new Set(), buffer: [], finished: false, confirms: new Map() });
+  res.json({ id });
+
+  const emit = emitter(id);
+  const confirm = (action) => new Promise((resolve) => {
+    const t = tasks.get(id);
+    const cid = Math.random().toString(36).slice(2, 8);
+    t.confirms.set(cid, resolve);
+    emit({ type: 'confirm-request', cid, action });
+    setTimeout(() => { if (t.confirms.has(cid)) { t.confirms.delete(cid); resolve(false); } }, 120000);
+  });
+
+  const orchCfg = { apiKey, model: orchModel, endpoint };
+  const workCfg = { apiKey, model: workerModel || orchModel, endpoint };
+  const plan = makePlanner(orchCfg, DEFAULT_ROSTER);
+  const decide = makeDecider({ apiKey, model: scoutModel || workerModel || orchModel, endpoint });
+
+  try {
+    const ctx = await getContext();
+    const workers = {
+      scout: makeScoutWorker({
+        newPage: () => ctx.newPage(),
+        decide, confirm, allowlist: ALLOWLIST, maxSteps: Number(maxSteps) || 25,
+      }),
+      researcher: makeTextWorker(workCfg, RESEARCHER_SYS),
+      writer: makeTextWorker(workCfg, WRITER_SYS),
+      analyst: makeTextWorker(workCfg, ANALYST_SYS),
+    };
+    await runTeam({
+      goal, plan, workers, emit,
+      maxRounds: Number(maxRounds) || 8,
+      maxParallel: Number(maxParallel) || 3,
+    });
   } catch (e) {
     emit({ type: 'error', message: e.message });
   }
